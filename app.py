@@ -47,7 +47,7 @@ if user_input := list.chat_input("¿Qué tienes en mente hoy o qué proyecto est
             temperature=0.7
         )
         
-       full_response = response.choices[0].message.content
+        full_response = response.choices[0].message.content
         message_placeholder.markdown(full_response)
         
     list.session_state.messages.append({"role": "assistant", "content": full_response})
