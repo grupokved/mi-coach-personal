@@ -1,94 +1,144 @@
 import streamlit as st
 import os
 from groq import Groq
+import firebase_admin
+from firebase_admin import credentials, firestore
+from datetime import datetime
+import re
 
-st.set_page_config(page_title="Mi Coach DeepSeek", page_icon="🧠", layout="centered")
+# --- CONFIGURACIÓN DE LA PÁGINA ---
+st.set_page_config(page_title="Mi Coach Personal", page_icon="🧠", layout="centered")
 st.title("🧠 Coach Personal e Intermediario Técnico")
 
-API_KEY = os.environ.get("GITHUB_TOKEN")
+# --- CONFIGURACIÓN DE FIREBASE ---
+if not firebase_admin._apps:
+    try:
+        firebase_creds = dict(st.secrets["firebase"])
+        cred = credentials.Certificate(firebase_creds)
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        st.error(f"Error al inicializar Firebase: {e}")
+        st.stop()
 
+db = firestore.client()
+
+# --- CONFIGURACIÓN DE GROQ ---
+API_KEY = os.environ.get("GITHUB_TOKEN")
 if not API_KEY:
-    st.error("⚠️ Falta la clave de API en Secrets.")
+    st.error("⚠️ Falta la clave de API de Groq en los Secrets.")
     st.stop()
 
 client = Groq(api_key=API_KEY)
 
-PROMPT_SISTEMA = """
-Eres **"El Estratega"**, el co-fundador y director de marketing de una agencia digital de élite. No eres un simple coach; eres un socio práctico, obsesionado con los resultados y la ejecución. Tu misión es guiar al usuario para que construya un negocio real desde cero, sin capital inicial, utilizando su creatividad, esfuerzo y las herramientas digitales disponibles.
+# --- FUNCIONES PARA FIREBASE ---
+def load_chat_history(user_id="default_user"):
+    """Carga el historial de chat desde Firestore."""
+    try:
+        doc_ref = db.collection('chats').document(user_id)
+        doc = doc_ref.get()
+        if doc.exists:
+            data = doc.to_dict()
+            return data.get('messages', []), data.get('user_name', None)
+        else:
+            return [], None
+    except Exception as e:
+        st.error(f"Error al cargar el historial: {e}")
+        return [], None
 
-# 👤 PERSONALIDAD Y ESTILO
+def save_chat_history(messages, user_id="default_user", user_name=None):
+    """Guarda el historial de chat en Firestore, incluyendo el nombre del usuario."""
+    try:
+        doc_ref = db.collection('chats').document(user_id)
+        data = {'messages': messages, 'last_updated': datetime.now()}
+        if user_name:
+            data['user_name'] = user_name
+        doc_ref.set(data)
+    except Exception as e:
+        st.error(f"Error al guardar el historial: {e}")
 
-*   **Genuinamente Interesado:** Preguntas de seguimiento profundas. No das respuestas genéricas; indagas para entender el negocio, la audiencia y la visión del usuario.
-*   **Práctico y Efectivo:** Tus consejos siempre se traducen en acciones concretas. Proporcionas plantillas, guías paso a paso y ejemplos.
-*   **Empático y Perspicaz:** Reconoces los miedos y frustraciones de empezar desde cero, pero los usas como combustible para la acción. Eres un mentor que da el empujón necesario.
-*   **Paciente pero Exigente:** Explicas las veces que sea necesario, pero siempre empujas hacia la ejecución. La perfección es enemiga de la acción.
+def extract_name(text):
+    """Intenta extraer un nombre de un mensaje de presentación."""
+    # Patrones comunes: "me llamo X", "soy X", "mi nombre es X"
+    patterns = [
+        r"me llamo\s+([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)",
+        r"soy\s+([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)",
+        r"mi nombre es\s+([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)"
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return None
 
-# 💼 ROLES Y COMPETENCIAS (Tu Caja de Herramientas)
-
-Actúas como un experto en los siguientes roles, fusionándolos para dar soluciones integrales:
-
-1.  **Estratega de Negocios y Product Manager:**
-    *   Ayudas a validar ideas de negocio con metodologías ágiles.
-    *   Diseñas el "Producto Mínimo Viable" (MVP) más sencillo y gratuito para empezar a testear.
-    *   Enseñas a construir una marca personal sin presupuesto.
-
-2.  **Director de Marketing Digital:**
-    *   Diseñas embudos de venta completos (desde la atracción hasta la conversión) usando herramientas gratuitas.
-    *   Dominas SEO, SEM, email marketing y redes sociales. Buscas y citas fuentes actualizadas para tus estrategias.
-    *   Enseñas a aprovechar el marketing de contenidos para atraer clientes orgánicamente.
-
-3.  **Social Media Manager y Creador de Contenido:**
-    *   Creas calendarios de contenido estratégicos para cada red social.
-    *   Enseñas a encontrar y analizar los mejores títulos para videos (YouTube, TikTok, Reels) basándote en tendencias y SEO. Buscas ejemplos reales.
-    *   Redactas guiones completos para videos, con ganchos, desarrollo y llamadas a la acción.
-
-4.  **Director de Cine y Generador de Prompts Visuales:**
-    *   Eres un experto en "prompt engineering" para IA de imagen (Midjourney, DALL-E, Stable Diffusion) y video.
-    *   Traduces ideas en prompts visuales detallados (estilo, iluminación, composición, cámara).
-    *   Concibes la estética de una marca y creas prompts para generar el contenido gráfico y de video que la represente.
-
-# 📈 PROTOCOLO DE RESPUESTA
-
-Cuando el usuario te consulte, sigue este flujo:
-
-1.  **Escucha y Analiza:** Profundiza en su situación actual, sus metas y sus recursos.
-2.  **Busca y Referencia:** Si necesitas información actualizada, indícalo y, si es posible, busca y proporciona referencias.
-3.  **Estructura la Solución:** Divide tu respuesta en pasos claros y accionables. Usa viñetas y negritas para mejorar la legibilidad.
-4.  **Entrega Valor Inmediato:** No solo des teoría. Proporciona plantillas, ejemplos de prompts, guiones o un plan de acción para la semana.
-5.  **Conecta los Puntos:** Muestra cómo las acciones de marketing, contenido y producto se alinean para construir el negocio.
-
-**Tu objetivo final es convertir al usuario en un "hacedor". Tu respuesta debe inspirar acción y proporcionar las herramientas para que la tome.**
-"""
-
+# --- INICIALIZAR EL ESTADO DE LA SESIÓN ---
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    # Cargar historial y nombre desde Firebase
+    historial, nombre_guardado = load_chat_history()
+    st.session_state.messages = historial
+    if nombre_guardado:
+        st.session_state.user_name = nombre_guardado
+    else:
+        st.session_state.user_name = None
 
+# --- GENERAR EL PROMPT DEL SISTEMA DE FORMA DINÁMICA ---
+def get_system_prompt():
+    base_prompt = """
+Eres "El Estratega", un coach personal, mentor de vida y estratega empresarial. 
+Tu enfoque es profundamente humano, empático y perspicaz.
+Escucha de forma activa, cuestiona con preguntas socráticas y ayuda a superar bloqueos mentales o miedos.
+No uses clichés motivacionales falsos; sé honesto, directo y analítico.
+También sirves como intermediario técnico: cuando el usuario hable de una idea de software o código vago, tradúcela en un PROMPT TÉCNICO PERFECTO, listo para copiar y pegar en Cursor, Copilot o ChatGPT.
+Mantén un tono de colega brillante, maduro y leal.
+"""
+    if st.session_state.user_name:
+        return f"{base_prompt}\n\nDirígete al usuario por su nombre: {st.session_state.user_name}."
+    else:
+        return base_prompt
+
+# --- MOSTRAR EL HISTORIAL ---
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
+# --- ENTRADA DEL USUARIO Y RESPUESTA ---
 if user_input := st.chat_input("¿Qué tienes en mente hoy o qué proyecto estás desarrollando?"):
+    # 1. Si el usuario no tiene nombre guardado, intentar extraerlo del mensaje
+    if not st.session_state.user_name:
+        posible_nombre = extract_name(user_input)
+        if posible_nombre:
+            st.session_state.user_name = posible_nombre
+            # Guardar el nombre en Firebase de inmediato
+            save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
+
+    # 2. Añadir mensaje del usuario al estado
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
 
+    # 3. Preparar la respuesta del asistente
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
-        # ⚠️ IMPORTANTE: Sin system prompt, todo va en el primer mensaje del usuario
-        api_messages = [{"role": "user", "content": PROMPT_SISTEMA}]
+        # Estructurar mensajes para la API de Groq
+        system_prompt = get_system_prompt()
+        api_messages = [{"role": "user", "content": system_prompt}]
         api_messages.extend(st.session_state.messages)
 
         try:
             response = client.chat.completions.create(
-                model="openai/gpt-oss-120b",  # ✅ El modelo correcto
+                model="llama-3.3-70b-versatile",
                 messages=api_messages,
-                temperature=0.6  # ✅ Temperatura ideal según documentación
+                temperature=0.7
             )
             
             full_response = response.choices[0].message.content
             placeholder.markdown(full_response)
+            
+            # 4. Guardar la respuesta de la IA en el estado
             st.session_state.messages.append({"role": "assistant", "content": full_response})
+            
+            # 5. Guardar el historial completo y el nombre en Firebase
+            save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
             
         except Exception as e:
             st.error(f"Error de conexión con la IA: {str(e)}")
