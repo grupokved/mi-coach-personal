@@ -37,7 +37,7 @@ db = firestore.client()
 
 # --- CONFIGURACIÓN DE APIS ---
 GROQ_API_KEY = os.environ.get("GITHUB_TOKEN")
-SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_TOKEN")  # <--- Nueva variable de entorno
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_TOKEN")
 
 if not GROQ_API_KEY:
     st.error("⚠️ Falta la clave de API de Groq en los Secrets.")
@@ -81,7 +81,7 @@ def get_groq_models():
     return None
 
 def get_siliconflow_models():
-    """Obtiene modelos de SiliconFlow desde su API."""
+    """Obtiene TODOS los modelos de SiliconFlow desde su API (sin filtros)."""
     if not SILICONFLOW_API_KEY:
         return None
     try:
@@ -93,10 +93,11 @@ def get_siliconflow_models():
             chat_models = {}
             for model in models_data.get("data", []):
                 model_id = model.get("id")
-                if model_id and not any(x in model_id for x in ["embedding", "whisper"]):
+                # Mostrar TODOS los modelos (eliminado filtro)
+                if model_id:
                     display_name = model_id
-                    if len(display_name) > 30:
-                        display_name = display_name[:27] + "..."
+                    if len(display_name) > 35:
+                        display_name = display_name[:32] + "..."
                     chat_models[f"🔵 {display_name}"] = model_id
             return chat_models
     except Exception as e:
@@ -130,7 +131,7 @@ VOICES = {
     "Venezuela - Paola (femenino)": "es-VE-PaolaNeural",
 }
 
-# --- OBTENER TODOS LOS MODELOS ---
+# --- OBTENER TODOS LOS MODELOS (dinámicos o respaldo ampliado) ---
 groq_models = get_groq_models()
 siliconflow_models = get_siliconflow_models()
 
@@ -141,13 +142,40 @@ if siliconflow_models:
     MODELS.update(siliconflow_models)
 
 if not MODELS:
-    # Fallback a modelos manuales
+    # Lista de respaldo ampliada con los mejores modelos de Groq + SiliconFlow
     MODELS = {
+        # 🟢 Groq
         "🟢 Llama 3.3 70B": "llama-3.3-70b-versatile",
         "🟢 Llama 3.1 8B": "llama-3.1-8b-instant",
         "🟢 GPT-OSS 120B": "openai/gpt-oss-120b",
-        "🔵 DeepSeek-V3": "deepseek-ai/DeepSeek-V3",
-        "🔵 Qwen 2.5 72B": "Qwen/Qwen2.5-72B-Instruct",
+        "🟢 GPT-OSS 20B": "openai/gpt-oss-20b",
+        "🟢 Qwen 3.6 27B": "qwen/qwen3.6-27b",
+        "🟢 Groq Compound": "groq/compound",
+        "🟢 Groq Compound Mini": "groq/compound-mini",
+        "🟢 Mixtral 8x7B": "mixtral-8x7b-32768",
+
+        # 🔵 SiliconFlow - Top models
+        "🔵 DeepSeek-V4-Pro (1.6T MoE)": "deepseek-ai/DeepSeek-V4-Pro",
+        "🔵 DeepSeek-V4-Flash (284B)": "deepseek-ai/DeepSeek-V4-Flash",
+        "🔵 Kimi-K3 (2.8T)": "moonshotai/Kimi-K3",
+        "🔵 Kimi-K2.7-Code (1T)": "moonshotai/Kimi-K2.7-Code",
+        "🔵 GLM-5.2 (744B)": "zai-org/GLM-5.2",
+        "🔵 Qwen3.6-35B-A3B (MoE)": "Qwen/Qwen3.6-35B-A3B",
+        "🔵 Qwen3.6-27B (multimodal)": "Qwen/Qwen3.6-27B",
+        "🔵 Gemma-4-31B-it (Google)": "google/gemma-4-31B-it",
+        "🔵 DeepSeek-V3.2 (685B)": "deepseek-ai/DeepSeek-V3.2",
+        "🔵 MiniMax-M3 (1M ctx)": "MiniMaxAI/MiniMax-M3",
+        "🔵 Qwen3.5-397B-A17B": "Qwen/Qwen3.5-397B-A17B",
+        "🔵 Qwen3.5-122B-A10B": "Qwen/Qwen3.5-122B-A10B",
+        "🔵 Step-3.5-Flash": "stepfun-ai/Step-3.5-Flash",
+        "🔵 Nex-N2-Pro": "nex-agi/Nex-N2-Pro",
+        "🔵 Hy3 (Tencent)": "tencent/Hy3",
+        "🔵 LongCat-2.0": "meituan-longcat/LongCat-2.0",
+        "🔵 DeepSeek-V3.1-Terminus": "deepseek-ai/DeepSeek-V3.1-Terminus",
+        "🔵 DeepSeek-R1": "deepseek-ai/DeepSeek-R1",
+        "🔵 Qwen3-32B": "Qwen/Qwen3-32B",
+        "🔵 Qwen3-14B": "Qwen/Qwen3-14B",
+        "🔵 Qwen3-8B": "Qwen/Qwen3-8B",
     }
 
 # --- FUNCIONES PARA FIREBASE ---
@@ -312,68 +340,41 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
     """
     chunks = split_text_into_chunks(text, max_chars)
     
-    # Determinar qué cliente usar basado en el modelo seleccionado
-    # Si el modelo tiene prefijo "🟢" es Groq, si tiene "🔵" es SiliconFlow
-    # Si viene de la lista dinámica, podemos detectar por el prefijo en el nombre
-    # Pero usaremos una lógica más robusta: probar ambos clientes
-    
-    # Intentar determinar el proveedor por el modelo ID
+    # Determinar proveedor por el ID del modelo
     is_groq = False
-    is_siliconflow = False
-    
-    # Lista de modelos conocidos de Groq (filtro por prefijo común)
-    groq_prefixes = ["llama-", "mixtral-", "gemma-", "openai/gpt-oss", "meta-llama/", "qwen/qwen"]
-    siliconflow_prefixes = ["deepseek-ai/", "Qwen/", "THUDM/", "01-ai/", "mistralai/", "google/"]
-    
+    groq_prefixes = ["llama-", "mixtral-", "gemma-", "openai/gpt-oss", "meta-llama/", "qwen/qwen", "groq/"]
     for prefix in groq_prefixes:
         if model_id.startswith(prefix):
             is_groq = True
             break
     
-    # Si no es Groq, asumir que es SiliconFlow
-    if not is_groq:
-        is_siliconflow = True
+    # Si no es Groq, asumir SiliconFlow
+    is_siliconflow = not is_groq
     
-    # Si no hay cliente para el proveedor, mostrar error
     if is_groq and not groq_client:
         st.error("❌ Cliente de Groq no disponible.")
         return "Error: Cliente de Groq no disponible."
     
     if is_siliconflow and not siliconflow_client:
-        st.error("❌ Cliente de SiliconFlow no disponible. Verifica que SILICONFLOW_TOKEN esté configurado.")
+        st.error("❌ Cliente de SiliconFlow no disponible. Verifica SILICONFLOW_TOKEN.")
         return "Error: Cliente de SiliconFlow no disponible."
     
-    # Seleccionar el cliente correcto
     client = groq_client if is_groq else siliconflow_client
     
     if len(chunks) == 1:
-        # Si es Groq, usar la librería de Groq; si es SiliconFlow, usar OpenAI
-        if is_groq:
-            response = client.chat.completions.create(
-                model=model_id,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    *history_messages,
-                    {"role": "user", "content": text}
-                ],
-                temperature=0.7
-            )
-        else:
-            # SiliconFlow usa la misma estructura
-            response = client.chat.completions.create(
-                model=model_id,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    *history_messages,
-                    {"role": "user", "content": text}
-                ],
-                temperature=0.7
-            )
+        response = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                *history_messages,
+                {"role": "user", "content": text}
+            ],
+            temperature=0.7
+        )
         return response.choices[0].message.content
     
-    # Texto largo: procesar por partes con pausas
     provider_name = "Groq" if is_groq else "SiliconFlow"
-    st.info(f"📊 Usando {provider_name} - El texto tiene {len(text)} caracteres. Se dividirá en {len(chunks)} partes con pausas de {pause_seconds}s.")
+    st.info(f"📊 Usando {provider_name} - {len(text)} caracteres → {len(chunks)} partes con pausas de {pause_seconds}s.")
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -393,43 +394,32 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
         """
         
         try:
-            if is_groq:
-                response = client.chat.completions.create(
-                    model=model_id,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": chunk_prompt}
-                    ],
-                    temperature=0.7
-                )
-            else:
-                response = client.chat.completions.create(
-                    model=model_id,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": chunk_prompt}
-                    ],
-                    temperature=0.7
-                )
+            response = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": chunk_prompt}
+                ],
+                temperature=0.7
+            )
             partial_responses.append(response.choices[0].message.content)
         except Exception as e:
-            st.error(f"Error en la parte {i+1}: {e}")
+            st.error(f"Error en parte {i+1}: {e}")
             time.sleep(pause_seconds * 2)
             continue
         
         if i < len(chunks) - 1:
-            status_text.text(f"⏳ Esperando {pause_seconds}s antes de la siguiente parte...")
+            status_text.text(f"⏳ Esperando {pause_seconds}s...")
             time.sleep(pause_seconds)
     
     progress_bar.empty()
     status_text.empty()
     
     if not partial_responses:
-        return "No se pudo procesar el texto. Intenta con un fragmento más pequeño."
+        return "No se pudo procesar el texto. Intenta con fragmentos más pequeños."
     
     st.info("🔄 Generando resumen completo...")
     
-    # Truncar respuestas parciales
     truncated_parts = []
     for resp in partial_responses:
         if len(resp) > 2000:
@@ -444,16 +434,16 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
     MAX_SUMMARY_CHARS = 8000
     if len(combined_text) > MAX_SUMMARY_CHARS:
         combined_text = combined_text[:MAX_SUMMARY_CHARS] + "\n... (contenido truncado para evitar errores)"
-        st.warning("⚠️ El resumen combinado era muy largo y se ha truncado para evitar errores de tamaño.")
+        st.warning("⚠️ El resumen combinado se ha truncado para evitar errores de tamaño.")
     
     summary_prompt = f"""
     He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL que integre toda la información.
     
-    Por favor, organiza tu respuesta en estas secciones:
-    1. **Resumen ejecutivo** (10 líneas máximas)
+    Organiza tu respuesta en estas secciones:
+    1. **Resumen ejecutivo** (máximo 10 líneas)
     2. **Flujo de trabajo paso a paso**
     3. **Herramientas y costes** (tabla)
-    4. **Prompts listos para copiar y pegar** (mínimo 5)
+    4. **Prompts listos para copiar** (mínimo 5)
     5. **Aplicación práctica para mi negocio**
     
     Aquí están los análisis de todas las partes:
@@ -461,24 +451,14 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
     {combined_text}
     """
     
-    if is_groq:
-        final_response = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": summary_prompt}
-            ],
-            temperature=0.7
-        )
-    else:
-        final_response = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": summary_prompt}
-            ],
-            temperature=0.7
-        )
+    final_response = client.chat.completions.create(
+        model=model_id,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": summary_prompt}
+        ],
+        temperature=0.7
+    )
     
     return final_response.choices[0].message.content
 
@@ -504,11 +484,11 @@ Has sido entrenado en la metodología "Clara System", un sistema de formación q
 4. Enseñar a crear prompts estructurados para cada herramienta.
 5. Enseñar a editar y combinar resultados para obtener un producto profesional.
 
-**Herramientas clave que enseña Clara System:**
-- **Suno**: para generar música y jingles.
-- **Freepik**: para generar imágenes y vídeos (Nano Banana, GPT, Seedance).
-- **CapCut / DaVinci Resolve**: para edición de vídeo.
-- **IAs entrenadas específicamente**: para cada negocio (como "Eva" para Evolution).
+**Herramientas clave:**
+- **Suno**: generar música y jingles.
+- **Freepik**: generar imágenes y vídeos (Nano Banana, GPT, Seedance).
+- **CapCut / DaVinci Resolve**: edición de vídeo.
+- **IAs entrenadas**: para cada negocio (como "Eva" para Evolution).
 
 **Llamada a la acción de Clara System:**
 - Invitan a entrar gratis al sistema para probarlo.
@@ -517,11 +497,11 @@ Has sido entrenado en la metodología "Clara System", un sistema de formación q
 - Enfatizan que "la perfección es enemiga de la acción".
 
 ### 💡 INSTRUCCIONES PARA TI:
-1. Cuando el usuario te pregunte sobre Clara System, responde con la información de este conocimiento.
+1. Cuando el usuario te pregunte sobre Clara System, responde con esta información.
 2. Cuando el usuario te pida consejos para su negocio, aplica la metodología de Clara System.
-3. Sé práctico, directo y orientado a resultados. No des teorías vacías.
-4. Usa ejemplos concretos de las herramientas que menciona Clara System.
-5. Mantén el tono humano, empático pero exigente: "la perfección es enemiga de la acción".
+3. Sé práctico, directo y orientado a resultados.
+4. Usa ejemplos concretos de las herramientas mencionadas.
+5. Mantén el tono humano, empático pero exigente.
 6. Si el usuario comparte transcripciones o documentos, analízalos para enriquecer el conocimiento.
 7. Recuerda al usuario que estamos en un momento crucial para aprender IA.
 """
@@ -554,7 +534,7 @@ st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
 
 st.sidebar.markdown("---")
 
-# Selector de Modelo (combinado: Groq + SiliconFlow)
+# Selector de Modelo (combinado)
 st.sidebar.markdown("### 🤖 Modelo de IA")
 model_options = sorted(MODELS.keys())
 if "selected_model_label" not in st.session_state:
@@ -568,7 +548,7 @@ selected_model_label = st.sidebar.selectbox(
 st.session_state.selected_model_label = selected_model_label
 selected_model_id = MODELS[selected_model_label]
 
-# Mostrar proveedor del modelo seleccionado
+# Mostrar proveedor
 if selected_model_label.startswith("🟢"):
     st.sidebar.info("**Proveedor:** Groq")
 elif selected_model_label.startswith("🔵"):
