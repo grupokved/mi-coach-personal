@@ -45,14 +45,20 @@ if not GROQ_API_KEY:
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
+# 🔑 INICIALIZAR SILICONFLOW CON LA URL CORRECTA
 if SILICONFLOW_API_KEY:
-    siliconflow_client = OpenAI(
-        api_key=SILICONFLOW_API_KEY,
-        base_url="https://api.siliconflow.cn/v1"
-    )
+    try:
+        siliconflow_client = OpenAI(
+            api_key=SILICONFLOW_API_KEY,
+            base_url="https://api.siliconflow.com/v1"  # <--- ¡CORREGIDO!
+        )
+        st.sidebar.success("✅ SiliconFlow conectado correctamente")
+    except Exception as e:
+        siliconflow_client = None
+        st.sidebar.error(f"❌ Error al conectar SiliconFlow: {e}")
 else:
     siliconflow_client = None
-    st.sidebar.warning("⚠️ No se encontró SILICONFLOW_TOKEN. Usando lista de respaldo de SiliconFlow.")
+    st.sidebar.warning("⚠️ No se encontró SILICONFLOW_TOKEN. Usando lista de respaldo.")
 
 # --- FUNCIONES PARA OBTENER MODELOS ---
 def get_groq_models():
@@ -79,10 +85,11 @@ def get_groq_models():
     return None
 
 def get_siliconflow_models():
-    if not SILICONFLOW_API_KEY:
+    if not SILICONFLOW_API_KEY or not siliconflow_client:
         return None
     try:
-        url = "https://api.siliconflow.cn/v1/models"
+        # SiliconFlow también tiene un endpoint para listar modelos
+        url = "https://api.siliconflow.com/v1/models"
         headers = {"Authorization": f"Bearer {SILICONFLOW_API_KEY}"}
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
@@ -131,7 +138,7 @@ VOICES = {
 groq_models = get_groq_models()
 siliconflow_models = get_siliconflow_models()
 
-# --- LISTA DE RESPALDO SIEMPRE INCLUIDA (con los mejores modelos de ambos) ---
+# --- LISTA DE RESPALDO SIEMPRE INCLUIDA ---
 MODELS = {
     # 🟢 Groq (respaldo)
     "🟢 Llama 3.3 70B": "llama-3.3-70b-versatile",
@@ -144,21 +151,21 @@ MODELS = {
     "🟢 Mixtral 8x7B": "mixtral-8x7b-32768",
 
     # 🔵 SiliconFlow (respaldo)
-    "🔵 DeepSeek-V4-Pro (1.6T MoE)": "deepseek-ai/DeepSeek-V4-Pro",
-    "🔵 DeepSeek-V4-Flash (284B)": "deepseek-ai/DeepSeek-V4-Flash",
-    "🔵 Kimi-K3 (2.8T)": "moonshotai/Kimi-K3",
-    "🔵 Kimi-K2.7-Code (1T)": "moonshotai/Kimi-K2.7-Code",
-    "🔵 GLM-5.2 (744B)": "zai-org/GLM-5.2",
-    "🔵 Qwen3.6-35B-A3B (MoE)": "Qwen/Qwen3.6-35B-A3B",
-    "🔵 Qwen3.6-27B (multimodal)": "Qwen/Qwen3.6-27B",
-    "🔵 Gemma-4-31B-it (Google)": "google/gemma-4-31B-it",
-    "🔵 DeepSeek-V3.2 (685B)": "deepseek-ai/DeepSeek-V3.2",
-    "🔵 MiniMax-M3 (1M ctx)": "MiniMaxAI/MiniMax-M3",
+    "🔵 DeepSeek-V4-Pro": "deepseek-ai/DeepSeek-V4-Pro",
+    "🔵 DeepSeek-V4-Flash": "deepseek-ai/DeepSeek-V4-Flash",
+    "🔵 Kimi-K3": "moonshotai/Kimi-K3",
+    "🔵 Kimi-K2.7-Code": "moonshotai/Kimi-K2.7-Code",
+    "🔵 GLM-5.2": "zai-org/GLM-5.2",
+    "🔵 Qwen3.6-35B-A3B": "Qwen/Qwen3.6-35B-A3B",
+    "🔵 Qwen3.6-27B": "Qwen/Qwen3.6-27B",
+    "🔵 Gemma-4-31B-it": "google/gemma-4-31B-it",
+    "🔵 DeepSeek-V3.2": "deepseek-ai/DeepSeek-V3.2",
+    "🔵 MiniMax-M3": "MiniMaxAI/MiniMax-M3",
     "🔵 Qwen3.5-397B-A17B": "Qwen/Qwen3.5-397B-A17B",
     "🔵 Qwen3.5-122B-A10B": "Qwen/Qwen3.5-122B-A10B",
     "🔵 Step-3.5-Flash": "stepfun-ai/Step-3.5-Flash",
     "🔵 Nex-N2-Pro": "nex-agi/Nex-N2-Pro",
-    "🔵 Hy3 (Tencent)": "tencent/Hy3",
+    "🔵 Hy3": "tencent/Hy3",
     "🔵 LongCat-2.0": "meituan-longcat/LongCat-2.0",
     "🔵 DeepSeek-V3.1-Terminus": "deepseek-ai/DeepSeek-V3.1-Terminus",
     "🔵 DeepSeek-R1": "deepseek-ai/DeepSeek-R1",
@@ -329,13 +336,12 @@ def split_text_into_chunks(text, max_chars=1500):
 
 def process_long_text_with_ia(text, system_prompt, history_messages, model_id, max_chars=1500, pause_seconds=3):
     """
-    Procesa un texto largo dividiéndolo en partes con pausas,
-    y genera un resumen final sin exceder el límite de tamaño de solicitud.
-    Soporta tanto Groq como SiliconFlow.
+    Procesa un texto largo dividiéndolo en partes con pausas.
+    Soporta Groq y SiliconFlow.
     """
     chunks = split_text_into_chunks(text, max_chars)
     
-    # Determinar proveedor por el ID del modelo
+    # Determinar proveedor
     is_groq = False
     groq_prefixes = ["llama-", "mixtral-", "gemma-", "openai/gpt-oss", "meta-llama/", "qwen/qwen", "groq/"]
     for prefix in groq_prefixes:
@@ -343,7 +349,6 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
             is_groq = True
             break
     
-    # Si no es Groq, asumir SiliconFlow
     is_siliconflow = not is_groq
     
     if is_groq and not groq_client:
@@ -351,7 +356,7 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
         return "Error: Cliente de Groq no disponible."
     
     if is_siliconflow and not siliconflow_client:
-        st.error("❌ Cliente de SiliconFlow no disponible. Verifica SILICONFLOW_TOKEN.")
+        st.error("❌ Cliente de SiliconFlow no disponible. Verifica SILICONFLOW_TOKEN y la URL.")
         return "Error: Cliente de SiliconFlow no disponible."
     
     client = groq_client if is_groq else siliconflow_client
@@ -428,11 +433,11 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
     
     MAX_SUMMARY_CHARS = 8000
     if len(combined_text) > MAX_SUMMARY_CHARS:
-        combined_text = combined_text[:MAX_SUMMARY_CHARS] + "\n... (contenido truncado para evitar errores)"
+        combined_text = combined_text[:MAX_SUMMARY_CHARS] + "\n... (contenido truncado)"
         st.warning("⚠️ El resumen combinado se ha truncado para evitar errores de tamaño.")
     
     summary_prompt = f"""
-    He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL que integre toda la información.
+    He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL.
     
     Organiza tu respuesta en estas secciones:
     1. **Resumen ejecutivo** (máximo 10 líneas)
@@ -457,39 +462,33 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
     
     return final_response.choices[0].message.content
 
-# --- PROMPT DEL SISTEMA (con Clara System) ---
+# --- PROMPT DEL SISTEMA ---
 def get_system_prompt():
     base_prompt = """
 Eres "El Estratega", un coach personal, mentor de vida y estratega empresarial especializado en Inteligencia Artificial. 
 Tu enfoque es profundamente humano, empático y perspicaz.
 
 ### 🧠 CONOCIMIENTO ESPECIALIZADO: CLARA SYSTEM
-Has sido entrenado en la metodología "Clara System", un sistema de formación que enseña a cualquier persona (sin conocimientos técnicos) a usar inteligencia artificial para multiplicar resultados en su negocio.
+Has sido entrenado en la metodología "Clara System", un sistema de formación que enseña a cualquier persona a usar inteligencia artificial para multiplicar resultados en su negocio.
 
-**Filosofía de Clara System:**
+**Filosofía:**
 - La IA ya está cambiando el mundo. Hay un año o año y medio para aprovechar este momento.
 - Cualquier persona puede aprender a usar IA sin conocimientos técnicos.
 - El objetivo no es solo aprender, sino APLICAR la IA para tener más clientes, ventas e ingresos.
 - El sistema ha demostrado multiplicar por 5 los resultados en 7 meses.
 
-**Metodología de Clara System:**
+**Metodología:**
 1. Entrenar una IA específica para tu negocio (no usar IA genérica).
 2. Generar contenido (vídeos, textos, imágenes) con IA para atraer clientes.
-3. Usar herramientas como Suno (música), Freepik (imágenes/vídeos), Seedance (videoclips).
-4. Enseñar a crear prompts estructurados para cada herramienta.
-5. Enseñar a editar y combinar resultados para obtener un producto profesional.
+3. Usar herramientas como Suno, Freepik, Seedance.
+4. Crear prompts estructurados para cada herramienta.
+5. Editar y combinar resultados para obtener un producto profesional.
 
 **Herramientas clave:**
-- **Suno**: generar música y jingles.
-- **Freepik**: generar imágenes y vídeos (Nano Banana, GPT, Seedance).
-- **CapCut / DaVinci Resolve**: edición de vídeo.
-- **IAs entrenadas**: para cada negocio (como "Eva" para Evolution).
-
-**Llamada a la acción de Clara System:**
-- Invitan a entrar gratis al sistema para probarlo.
-- Destacan que es un momento crucial para aprender.
-- Ofrecen acompañamiento personalizado.
-- Enfatizan que "la perfección es enemiga de la acción".
+- Suno: generar música y jingles.
+- Freepik: generar imágenes y vídeos.
+- CapCut / DaVinci Resolve: edición de vídeo.
+- IAs entrenadas para cada negocio.
 
 ### 💡 INSTRUCCIONES PARA TI:
 1. Cuando el usuario te pregunte sobre Clara System, responde con esta información.
@@ -529,7 +528,7 @@ st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
 
 st.sidebar.markdown("---")
 
-# Selector de Modelo (combinado)
+# Selector de Modelo
 st.sidebar.markdown("### 🤖 Modelo de IA")
 model_options = sorted(MODELS.keys())
 if "selected_model_label" not in st.session_state:
@@ -543,7 +542,6 @@ selected_model_label = st.sidebar.selectbox(
 st.session_state.selected_model_label = selected_model_label
 selected_model_id = MODELS[selected_model_label]
 
-# Mostrar proveedor
 if selected_model_label.startswith("🟢"):
     st.sidebar.info("**Proveedor:** Groq")
 elif selected_model_label.startswith("🔵"):
@@ -552,9 +550,9 @@ else:
     st.sidebar.info("**Proveedor:** Desconocido")
 
 st.sidebar.markdown(f"**Modelo:** `{selected_model_id}`")
-st.sidebar.caption(f"📋 {len(MODELS)} modelos disponibles (Groq + SiliconFlow)")
+st.sidebar.caption(f"📋 {len(MODELS)} modelos disponibles")
 
-# --- MOSTRAR HISTORIAL CON BOTÓN DE VOZ ---
+# --- MOSTRAR HISTORIAL ---
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -566,7 +564,7 @@ for idx, msg in enumerate(st.session_state.messages):
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
 
-# --- ENTRADA DEL USUARIO Y RESPUESTA ---
+# --- ENTRADA DEL USUARIO ---
 user_input = st.chat_input(
     placeholder="¿Qué tienes en mente hoy? (Puedes subir imágenes, PDFs, etc.)",
     accept_file=True,
