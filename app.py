@@ -14,7 +14,8 @@ import PyPDF2
 import csv
 from io import StringIO
 import hashlib
-import easyocr  # Para OCR de imágenes sin Tesseract
+import easyocr
+import requests  # <-- Nuevo: para consultar la API de Groq
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Mi Coach Personal", page_icon="🧠", layout="wide")
@@ -67,11 +68,54 @@ VOICES = {
     "Venezuela - Paola (femenino)": "es-VE-PaolaNeural",
 }
 
-# --- MODELOS DISPONIBLES (los que funcionan según tu lista) ---
-MODELS = {
-    "GPT-OSS-120B (razonamiento)": "openai/gpt-oss-120b",
-    "Llama 3.3 70B (rápido)": "llama-3.3-70b-versatile",
-}
+# --- FUNCIÓN PARA OBTENER MODELOS DINÁMICAMENTE DESDE GROQ ---
+def get_available_models():
+    """
+    Consulta la API de Groq y devuelve un diccionario con los modelos de chat disponibles.
+    """
+    try:
+        url = "https://api.groq.com/openai/v1/models"
+        headers = {"Authorization": f"Bearer {API_KEY}"}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            models_data = response.json()
+            chat_models = {}
+            for model in models_data.get("data", []):
+                model_id = model.get("id")
+                # Filtrar solo modelos útiles para chat (excluir TTS, guard, etc.)
+                if model_id and not any(x in model_id for x in ["whisper", "guard", "orpheus", "prompt"]):
+                    # Crear un nombre legible
+                    display_name = model_id
+                    # Limpiar prefijos largos
+                    for prefix in ["meta-llama/", "openai/", "qwen/", "canopylabs/", "minimaxai/"]:
+                        if display_name.startswith(prefix):
+                            display_name = display_name[len(prefix):]
+                    # Limitar longitud para el selector
+                    if len(display_name) > 30:
+                        display_name = display_name[:27] + "..."
+                    chat_models[display_name] = model_id
+            return chat_models
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ No se pudo obtener la lista de modelos: {e}")
+    return None
+
+# --- OBTENER MODELOS (dinámicos o respaldo) ---
+dynamic_models = get_available_models()
+
+if dynamic_models:
+    MODELS = dynamic_models
+else:
+    # Lista de respaldo por si falla la conexión
+    MODELS = {
+        "GPT-OSS-120B": "openai/gpt-oss-120b",
+        "Llama 3.3 70B": "llama-3.3-70b-versatile",
+        "Llama 3.1 8B": "llama-3.1-8b-instant",
+        "GPT-OSS 20B": "openai/gpt-oss-20b",
+        "Qwen 3.6 27B": "qwen/qwen3.6-27b",
+        "Groq Compound": "groq/compound",
+        "Groq Compound Mini": "groq/compound-mini",
+        "Mixtral 8x7B": "mixtral-8x7b-32768",
+    }
 
 # --- FUNCIONES PARA FIREBASE ---
 def load_chat_history(user_id="default_user"):
@@ -214,36 +258,128 @@ def process_uploaded_file(uploaded_file):
             "content": f"Archivo '{file_name}' subido (tipo: {file_type}). No se pudo extraer texto automáticamente."
         }
 
+# --- FUNCIONES PARA DIVIDIR TEXTOS LARGOS Y PROCESARLOS ---
+def split_text_into_chunks(text, max_chars=5000):
+    """
+    Divide un texto en fragmentos de aproximadamente max_chars caracteres,
+    respetando saltos de línea y puntos para no cortar palabras.
+    """
+    if len(text) <= max_chars:
+        return [text]
+    
+    chunks = []
+    current_chunk = ""
+    for line in text.split('\n'):
+        if len(current_chunk) + len(line) + 1 <= max_chars:
+            current_chunk += line + '\n'
+        else:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = line + '\n'
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    return chunks
+
+def process_long_text_with_ia(text, system_prompt, history_messages, client, model_id, max_chars=5000):
+    """
+    Procesa un texto largo dividiéndolo en partes y combinando resultados.
+    """
+    chunks = split_text_into_chunks(text, max_chars)
+    
+    if len(chunks) == 1:
+        # Texto corto: procesar directamente
+        response = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                *history_messages,
+                {"role": "user", "content": text}
+            ],
+            temperature=0.7
+        )
+        return response.choices[0].message.content
+    
+    # Texto largo: procesar por partes
+    st.info(f"📊 El texto es muy largo ({len(text)} caracteres). Se dividirá en {len(chunks)} partes para procesarlo.")
+    
+    # Crear un placeholder para el progreso
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    partial_responses = []
+    for i, chunk in enumerate(chunks):
+        status_text.text(f"⏳ Procesando parte {i+1} de {len(chunks)}...")
+        progress_bar.progress((i + 1) / len(chunks))
+        
+        # Crear un mensaje específico para esta parte
+        chunk_prompt = f"""
+        A continuación, analiza la PARTE {i+1} de {len(chunks)} de un texto extenso.
+        Extrae los puntos clave de esta sección de forma estructurada.
+        
+        --- INICIO DE LA PARTE {i+1} ---
+        {chunk}
+        --- FIN DE LA PARTE {i+1} ---
+        """
+        
+        response = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": chunk_prompt}
+            ],
+            temperature=0.7
+        )
+        partial_responses.append(response.choices[0].message.content)
+    
+    # Limpiar indicadores de progreso
+    progress_bar.empty()
+    status_text.empty()
+    
+    # Combinar todas las respuestas parciales en un resumen final
+    st.info("🔄 Generando resumen completo...")
+    
+    # Crear un resumen unificado
+    combined_text = "Aquí tienes el análisis completo del texto, organizado por secciones:\n\n"
+    for i, resp in enumerate(partial_responses):
+        combined_text += f"--- PARTE {i+1} ---\n\n{resp}\n\n"
+    
+    # Pedir un resumen ejecutivo final
+    summary_prompt = f"""
+    He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL que integre toda la información.
+    
+    Por favor, organiza tu respuesta en estas secciones:
+    1. **Resumen ejecutivo** (10 líneas máximas)
+    2. **Flujo de trabajo paso a paso**
+    3. **Herramientas y costes** (tabla)
+    4. **Prompts listos para copiar y pegar** (mínimo 5)
+    5. **Aplicación práctica para mi negocio**
+    
+    Aquí están los análisis de todas las partes:
+    
+    {combined_text}
+    """
+    
+    final_response = client.chat.completions.create(
+        model=model_id,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": summary_prompt}
+        ],
+        temperature=0.7
+    )
+    
+    return final_response.choices[0].message.content
+
 # --- GENERAR EL PROMPT DEL SISTEMA ---
 def get_system_prompt():
     base_prompt = """
 Eres "El Estratega", un coach personal, mentor de vida y estratega empresarial. 
 Tu enfoque es profundamente humano, empático y perspicaz.
 
-Además de tus funciones de coach, tienes una habilidad especial:
+Además de tus funciones de coach, tienes una habilidad especial: cuando el usuario te comparta un texto largo (transcripción, tutorial, artículo), debes analizarlo profundamente y extraer su estructura, identificar herramientas y pasos clave, generar un resumen ejecutivo claro, crear prompts listos para usar y adaptar el conocimiento a la realidad del usuario.
 
-**CAPACIDAD DE ANÁLISIS Y REPLICACIÓN:**
-Cuando el usuario te comparta un texto largo (transcripción, tutorial, artículo), debes:
-1. Analizarlo profundamente y extraer su estructura.
-2. Identificar las herramientas, pasos y flujos de trabajo clave.
-3. Generar un resumen ejecutivo claro y accionable.
-4. Crear prompts listos para usar basados en ese contenido.
-5. Adaptar el conocimiento a la realidad del usuario (su negocio, su audiencia).
-
-**ESTILO DE RESPUESTA:**
-- Sé práctico: siempre da ejemplos concretos y pasos a seguir.
-- Sé generador: no solo analices, también propón nuevas ideas.
-- Sé recordatorio: cuando sea relevante, recuerda al usuario lo que ya ha compartido contigo (usa tu memoria de Firebase).
-- Sé visual: si es útil, sugiere cómo aplicar el conocimiento a su negocio.
-
-**EJEMPLO DE RESPUESTA IDEAL:**
-Si el usuario te pasa un tutorial sobre videoclips con IA, tu respuesta debe incluir:
-- Un resumen de 5 puntos del flujo de trabajo.
-- Una tabla con herramientas y costes.
-- 3 prompts listos para copiar y pegar en las herramientas mencionadas.
-- Una sugerencia personalizada para el negocio del usuario.
-
-Mantén tu tono de colega brillante, maduro y leal.
+Sé práctico, generador y recordatorio. Siempre da ejemplos concretos y pasos a seguir.
+Mantén un tono de colega brillante, maduro y leal.
 """
     if st.session_state.get('user_name'):
         return f"{base_prompt}\n\nDirígete al usuario por su nombre: {st.session_state.user_name}."
@@ -272,17 +408,23 @@ st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🤖 Modelo de IA")
-model_options = list(MODELS.keys())
-if "selected_model" not in st.session_state:
-    st.session_state.selected_model = model_options[0]
+
+# Ordenar los modelos para mostrarlos bonitos
+model_options = sorted(MODELS.keys())
+if "selected_model_label" not in st.session_state:
+    st.session_state.selected_model_label = model_options[0]
+
 selected_model_label = st.sidebar.selectbox(
     "Elige el modelo",
     options=model_options,
-    index=model_options.index(st.session_state.selected_model)
+    index=model_options.index(st.session_state.selected_model_label)
 )
-st.session_state.selected_model = selected_model_label
+st.session_state.selected_model_label = selected_model_label
 selected_model_id = MODELS[selected_model_label]
 st.sidebar.markdown(f"**Modelo actual:** `{selected_model_id}`")
+
+# Mostrar cuántos modelos se cargaron
+st.sidebar.caption(f"📋 {len(MODELS)} modelos disponibles")
 
 # --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN (para mensajes antiguos) ---
 for idx, msg in enumerate(st.session_state.messages):
@@ -355,20 +497,19 @@ if user_input is not None:
                 history_messages.append({"role": "assistant", "content": msg["content"]})
         
         try:
-            response = client.chat.completions.create(
-                model=selected_model_id,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    *history_messages,
-                    {"role": "user", "content": full_user_text}
-                ],
-                temperature=0.7
+            # 🚀 Procesar el texto usando la función de división automática
+            full_response = process_long_text_with_ia(
+                text=full_user_text,
+                system_prompt=system_prompt,
+                history_messages=history_messages,
+                client=client,
+                model_id=selected_model_id,
+                max_chars=5000
             )
             
-            full_response = response.choices[0].message.content
             placeholder.markdown(full_response)
             
-            # 🎯 NUEVO: Botón "Escuchar" que aparece instantáneamente (sin recargar)
+            # 🎯 Botón "Escuchar" que aparece instantáneamente
             content_hash = hashlib.md5(full_response.encode()).hexdigest()[:8]
             if st.button("🔊 Escuchar (nuevo)", key=f"tts_live_{content_hash}"):
                 voice_short = VOICES[st.session_state.selected_voice]
@@ -379,8 +520,6 @@ if user_input is not None:
             # 7. Guardar la respuesta en el estado y Firebase
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
-            
-            # ⚠️ Ya NO se necesita st.rerun() porque el botón ya está aquí
             
         except Exception as e:
             st.error(f"Error de conexión con la IA: {str(e)}")
