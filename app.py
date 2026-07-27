@@ -66,18 +66,14 @@ VOICES = {
     "Venezuela - Paola (femenino)": "es-VE-PaolaNeural",
 }
 
-# --- MODELOS DISPONIBLES ---
-MODELS = {
-    "GPT-OSS-120B (multimodal)": "openai/gpt-oss-120b",
+# --- MODELOS DISPONIBLES PARA EL CHAT ---
+CHAT_MODELS = {
+    "GPT-OSS-120B (razonamiento)": "openai/gpt-oss-120b",
     "Llama 3.3 70B (rápido)": "llama-3.3-70b-versatile",
 }
 
-# --- MODELOS DE OCR (VISIÓN) ---
-OCR_MODELS = {
-    "Llama 4 Maverick (OCR)": "meta-llama/llama-4-maverick-17b-128e-instruct",
-    "Llama 4 Scout (OCR)": "meta-llama/llama-4-scout-17b-16e-instruct",
-    "Qwen 3.6 (OCR)": "qwen/qwen3.6-27b",
-}
+# --- MODELO PARA VISIÓN (OCR) ---
+VISION_MODEL = "qwen/qwen3.6-27b"
 
 # --- FUNCIONES PARA FIREBASE ---
 def load_chat_history(user_id="default_user"):
@@ -133,26 +129,24 @@ def text_to_speech(text, voice):
     asyncio.set_event_loop(loop)
     return loop.run_until_complete(text_to_speech_async(text, voice))
 
-# --- FUNCIÓN PARA OCR CON MODELOS DE VISIÓN DE GROQ ---
-def ocr_image_with_groq(image_bytes, mime_type, ocr_model):
-    """
-    Usa un modelo de visión de Groq (Llama 4 Maverick, Scout, etc.) para extraer texto de una imagen.
-    """
+# --- FUNCIÓN PARA PROCESAR IMAGEN CON VISION MODEL ---
+def process_image_with_vision(image_bytes, mime_type, user_prompt="Extrae todo el texto de esta imagen."):
+    """Envía la imagen al modelo de visión qwen/qwen3.6-27b y devuelve la descripción/OCR."""
     try:
-        # Codificar la imagen en base64
-        encoded = base64.b64encode(image_bytes).decode('utf-8')
-        data_url = f"data:{mime_type};base64,{encoded}"
+        # Codificar la imagen a base64
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        data_url = f"data:{mime_type};base64,{base64_image}"
         
-        # Llamada al modelo de visión
+        # Llamar al modelo de visión
         completion = client.chat.completions.create(
-            model=ocr_model,
+            model=VISION_MODEL,
             messages=[
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "text",
-                            "text": "Extrae TODO el texto de esta imagen. Devuelve solo el texto extraído, sin comentarios adicionales. Si no hay texto, responde 'No se encontró texto'."
+                            "text": user_prompt
                         },
                         {
                             "type": "image_url",
@@ -163,39 +157,30 @@ def ocr_image_with_groq(image_bytes, mime_type, ocr_model):
                     ]
                 }
             ],
-            temperature=0.1  # Baja temperatura para mayor precisión
+            temperature=0.7,
+            max_completion_tokens=1024,
         )
-        
-        extracted_text = completion.choices[0].message.content.strip()
-        return extracted_text if extracted_text else "No se encontró texto."
-    
+        return completion.choices[0].message.content
     except Exception as e:
-        st.error(f"Error en OCR con {ocr_model}: {e}")
-        return f"Error al procesar la imagen: {str(e)}"
+        return f"Error al procesar la imagen con el modelo de visión: {str(e)}"
 
 # --- FUNCIÓN PARA PROCESAR ARCHIVOS SUBIDOS ---
-def process_uploaded_file(uploaded_file, ocr_model):
-    """Procesa el archivo subido y devuelve el contenido extraído."""
+def process_uploaded_file(uploaded_file):
+    """Procesa archivos: imágenes, PDFs, TXT, CSV."""
     file_type = uploaded_file.type
     file_name = uploaded_file.name
     file_bytes = uploaded_file.read()
     
-    # Imagen: OCR con modelo de visión de Groq
+    # IMAGEN: se procesará en la lógica principal (porque necesita el prompt del usuario)
     if file_type.startswith("image/"):
-        try:
-            extracted_text = ocr_image_with_groq(file_bytes, file_type, ocr_model)
-            return {
-                "type": "text",
-                "content": f"[OCR de la imagen '{file_name}' usando {ocr_model}]:\n{extracted_text[:3000]}"
-            }
-        except Exception as e:
-            st.error(f"Error al procesar la imagen: {e}")
-            return {
-                "type": "text",
-                "content": f"Error al procesar la imagen '{file_name}': {str(e)}"
-            }
+        return {
+            "type": "image",
+            "mime_type": file_type,
+            "data": file_bytes,
+            "name": file_name
+        }
     
-    # PDF: extraer texto con PyPDF2
+    # PDF: extraer texto
     elif file_type == "application/pdf":
         try:
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
@@ -268,9 +253,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = historial
     st.session_state.user_name = nombre_guardado if nombre_guardado else None
 
-# --- SELECCIONAR VOZ, MODELO DE CHAT Y MODELO DE OCR EN LA BARRA LATERAL ---
+# --- SELECCIONAR VOZ Y MODELO EN LA BARRA LATERAL ---
 st.sidebar.title("⚙️ Configuración")
-
 st.sidebar.markdown("### 🎤 Voz para texto a voz")
 voice_options = sorted(VOICES.keys())
 if "selected_voice" not in st.session_state:
@@ -284,32 +268,19 @@ st.session_state.selected_voice = selected_voice_label
 st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🤖 Modelo para el Chat")
-model_options = list(MODELS.keys())
+st.sidebar.markdown("### 🤖 Modelo de IA (para el chat)")
+model_options = list(CHAT_MODELS.keys())
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = model_options[0]
 selected_model_label = st.sidebar.selectbox(
-    "Elige el modelo de chat",
+    "Elige el modelo",
     options=model_options,
     index=model_options.index(st.session_state.selected_model)
 )
 st.session_state.selected_model = selected_model_label
-selected_model_id = MODELS[selected_model_label]
-st.sidebar.markdown(f"**Chat:** `{selected_model_id}`")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🖼️ Modelo para OCR (imágenes)")
-ocr_options = list(OCR_MODELS.keys())
-if "selected_ocr_model" not in st.session_state:
-    st.session_state.selected_ocr_model = ocr_options[0]  # Llama 4 Maverick por defecto
-selected_ocr_label = st.sidebar.selectbox(
-    "Elige el modelo de OCR",
-    options=ocr_options,
-    index=ocr_options.index(st.session_state.selected_ocr_model)
-)
-st.session_state.selected_ocr_model = selected_ocr_label
-selected_ocr_model_id = OCR_MODELS[selected_ocr_label]
-st.sidebar.markdown(f"**OCR:** `{selected_ocr_model_id}`")
+selected_model_id = CHAT_MODELS[selected_model_label]
+st.sidebar.markdown(f"**Modelo actual:** `{selected_model_id}`")
+st.sidebar.markdown("**📷 Para imágenes se usará:** `qwen/qwen3.6-27b`")
 
 # --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN ---
 for idx, msg in enumerate(st.session_state.messages):
@@ -335,57 +306,82 @@ if user_input is not None:
     # 1. Extraer texto del mensaje
     user_text = user_input.get("text", "")
     
-    # 2. Procesar archivos adjuntos usando el modelo de OCR seleccionado
+    # 2. Procesar archivos adjuntos
     uploaded_files = user_input.get("files", [])
     file_contents = []
-    for uploaded_file in uploaded_files:
-        processed = process_uploaded_file(uploaded_file, selected_ocr_model_id)
-        if processed:
-            file_contents.append(processed)
+    images_to_process = []
     
-    # 3. Construir el mensaje del usuario (SOLO TEXTO, sin imágenes en la API)
+    for uploaded_file in uploaded_files:
+        processed = process_uploaded_file(uploaded_file)
+        if processed:
+            if processed.get("type") == "image":
+                images_to_process.append(processed)
+            else:
+                file_contents.append(processed)
+    
+    # 3. Procesar imágenes con el modelo de visión
+    vision_results = []
+    for img_data in images_to_process:
+        # Usar el prompt del usuario o uno por defecto
+        ocr_prompt = user_text if user_text else "Extrae todo el texto de esta imagen y descríbela en español."
+        result = process_image_with_vision(
+            img_data["data"],
+            img_data["mime_type"],
+            ocr_prompt
+        )
+        vision_results.append(f"[Análisis de '{img_data['name']}']:\n{result}")
+    
+    # 4. Si el usuario subió imágenes pero no escribió nada, usar un prompt por defecto
+    if images_to_process and not user_text:
+        user_text = "Por favor, analiza las imágenes que he subido y dime qué contienen."
+    
+    # 5. Construir el mensaje completo (texto + resultados de visión)
     full_user_text = user_text
+    if vision_results:
+        full_user_text += "\n\n" + "\n\n".join(vision_results)
+    
     for fc in file_contents:
         if fc["type"] == "text":
             full_user_text += "\n\n" + fc["content"]
     
-    # Si no hay contenido (solo archivos no procesables), añadir un texto por defecto
     if not full_user_text.strip():
         full_user_text = "He subido un archivo."
     
-    # 4. Si el usuario no tiene nombre guardado, intentar extraerlo
+    # 6. Si el usuario no tiene nombre guardado, intentar extraerlo
     if not st.session_state.user_name and user_text:
         posible_nombre = extract_name(user_text)
         if posible_nombre:
             st.session_state.user_name = posible_nombre
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
     
-    # 5. Guardar mensaje del usuario en el estado (para mostrar en el historial)
+    # 7. Guardar mensaje del usuario en el estado (para mostrar en el historial)
     display_text = user_text if user_text else ""
+    if images_to_process:
+        display_text += "\n\n📷 Imágenes subidas: " + ", ".join([f"'{img['name']}'" for img in images_to_process])
     if file_contents:
-        display_text += "\n\n📎 Archivos adjuntos: " + ", ".join([f"'{f.get('content', 'archivo')}'" for f in file_contents if f])
+        display_text += "\n\n📎 Archivos adjuntos: " + ", ".join([f"'{fc.get('name', 'archivo')}'" for fc in file_contents if fc.get('name')])
+    if not display_text.strip():
+        display_text = "Archivo subido."
     
     st.session_state.messages.append({"role": "user", "content": display_text})
     with st.chat_message("user"):
         st.markdown(display_text)
     
-    # 6. Preparar la respuesta del asistente
+    # 8. Preparar la respuesta del asistente (usando el modelo de chat seleccionado)
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
-        # Construir los mensajes para la API (TODOS DE TEXTO PLANO)
         system_prompt = get_system_prompt()
         
-        # Preparar el historial anterior (solo texto)
         history_messages = []
-        for msg in st.session_state.messages[:-1]:  # Excluir el mensaje actual
+        for msg in st.session_state.messages[:-1]:
             if msg["role"] == "user":
                 history_messages.append({"role": "user", "content": msg["content"]})
             else:
                 history_messages.append({"role": "assistant", "content": msg["content"]})
         
         try:
-            # Usar el modelo de chat seleccionado
+            # Usar el modelo de chat seleccionado para la respuesta final
             response = client.chat.completions.create(
                 model=selected_model_id,
                 messages=[
@@ -399,10 +395,7 @@ if user_input is not None:
             full_response = response.choices[0].message.content
             placeholder.markdown(full_response)
             
-            # 7. Guardar la respuesta en el estado
             st.session_state.messages.append({"role": "assistant", "content": full_response})
-            
-            # 8. Guardar en Firebase
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
             
         except Exception as e:
