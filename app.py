@@ -9,7 +9,7 @@ import edge_tts
 import asyncio
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Mi Coach Personal", page_icon="🧠", layout="centered")
+st.set_page_config(page_title="Mi Coach Personal", page_icon="🧠", layout="wide")
 st.title("🧠 Coach Personal e Intermediario Técnico")
 
 # --- CONFIGURACIÓN DE FIREBASE ---
@@ -32,9 +32,57 @@ if not API_KEY:
 
 client = Groq(api_key=API_KEY)
 
+# --- DICCIONARIO DE VOCES DISPONIBLES EN ESPAÑOL ---
+VOICES = {
+    # 🇪🇸 España
+    "España - Elvira (femenino)": "es-ES-ElviraNeural",
+    "España - Álvaro (masculino)": "es-ES-AlvaroNeural",
+    # 🇲🇽 México
+    "México - Dalia (femenino)": "es-MX-DaliaNeural",
+    "México - Jorge (masculino)": "es-MX-JorgeNeural",
+    # 🇦🇷 Argentina
+    "Argentina - Elena (femenino)": "es-AR-ElenaNeural",
+    # 🇧🇴 Bolivia
+    "Bolivia - Marcelo (masculino)": "es-BO-MarceloNeural",
+    # 🇨🇱 Chile
+    "Chile - Catalina (femenino)": "es-CL-CatalinaNeural",
+    # 🇨🇴 Colombia
+    "Colombia - Gonzalo (masculino)": "es-CO-GonzaloNeural",
+    # 🇨🇷 Costa Rica
+    "Costa Rica - Juan (masculino)": "es-CR-JuanNeural",
+    # 🇨🇺 Cuba
+    "Cuba - Belkys (femenino)": "es-CU-BelkysNeural",
+    # 🇩🇴 República Dominicana
+    "República Dominicana - Emilio (masculino)": "es-DO-EmilioNeural",
+    # 🇪🇨 Ecuador
+    "Ecuador - Andrea (femenino)": "es-EC-AndreaNeural",
+    # 🇬🇹 Guatemala
+    "Guatemala - Andrés (masculino)": "es-GT-AndresNeural",
+    # 🇭🇳 Honduras
+    "Honduras - Carlos (masculino)": "es-HN-CarlosNeural",
+    # 🇳🇮 Nicaragua
+    "Nicaragua - Federico (masculino)": "es-NI-FedericoNeural",
+    # 🇵🇦 Panamá
+    "Panamá - Margarita (femenino)": "es-PA-MargaritaNeural",
+    # 🇵🇪 Perú
+    "Perú - Camila (femenino)": "es-PE-CamilaNeural",
+    # 🇵🇷 Puerto Rico
+    "Puerto Rico - Karina (femenino)": "es-PR-KarinaNeural",
+    # 🇵🇾 Paraguay
+    "Paraguay - Tania (femenino)": "es-PY-TaniaNeural",
+    # 🇸🇻 El Salvador
+    "El Salvador - Lorena (femenino)": "es-SV-LorenaNeural",
+    # 🇺🇸 Estados Unidos (español)
+    "EE.UU. - Alonso (masculino)": "es-US-AlonsoNeural",
+    # 🇺🇾 Uruguay
+    "Uruguay - Mateo (masculino)": "es-UY-MateoNeural",
+    # 🇻🇪 Venezuela
+    "Venezuela - Paola (femenino)": "es-VE-PaolaNeural",
+}
+
 # --- FUNCIONES PARA FIREBASE ---
 def load_chat_history(user_id="default_user"):
-    """Carga el historial de chat y el nombre desde Firestore."""
+    """Carga el historial de chat desde Firestore."""
     try:
         doc_ref = db.collection('chats').document(user_id)
         doc = doc_ref.get()
@@ -48,7 +96,7 @@ def load_chat_history(user_id="default_user"):
         return [], None
 
 def save_chat_history(messages, user_id="default_user", user_name=None):
-    """Guarda el historial y el nombre en Firestore."""
+    """Guarda el historial de chat en Firestore, incluyendo el nombre del usuario."""
     try:
         doc_ref = db.collection('chats').document(user_id)
         data = {'messages': messages, 'last_updated': datetime.now()}
@@ -58,7 +106,6 @@ def save_chat_history(messages, user_id="default_user", user_name=None):
     except Exception as e:
         st.error(f"Error al guardar el historial: {e}")
 
-# --- FUNCIÓN PARA EXTRAER NOMBRE DEL USUARIO ---
 def extract_name(text):
     """Intenta extraer un nombre de un mensaje de presentación."""
     patterns = [
@@ -72,9 +119,12 @@ def extract_name(text):
             return match.group(1).strip()
     return None
 
-# --- FUNCIÓN DE TEXTO A VOZ (edge-tts en español) ---
-async def text_to_speech_async(text, voice="es-ES-ElviraNeural"):
-    """Convierte texto a voz usando edge-tts (gratis, sin API key) y devuelve los bytes del audio."""
+# --- FUNCIÓN DE TEXTO A VOZ (edge-tts) ---
+async def text_to_speech_async(text, voice):
+    """
+    Convierte texto a voz usando edge-tts (gratuito, sin API key).
+    Devuelve los bytes del audio MP3.
+    """
     try:
         communicate = edge_tts.Communicate(text, voice)
         audio_data = b""
@@ -86,11 +136,11 @@ async def text_to_speech_async(text, voice="es-ES-ElviraNeural"):
         st.error(f"Error al generar el audio: {e}")
         return None
 
-def text_to_speech(text):
-    """Función wrapper para llamar a la función asíncrona desde Streamlit."""
+def text_to_speech(text, voice):
+    """Función wrapper para llamar desde Streamlit."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    return loop.run_until_complete(text_to_speech_async(text))
+    return loop.run_until_complete(text_to_speech_async(text, voice))
 
 # --- GENERAR EL PROMPT DEL SISTEMA DE FORMA DINÁMICA ---
 def get_system_prompt():
@@ -102,7 +152,7 @@ No uses clichés motivacionales falsos; sé honesto, directo y analítico.
 También sirves como intermediario técnico: cuando el usuario hable de una idea de software o código vago, tradúcela en un PROMPT TÉCNICO PERFECTO, listo para copiar y pegar en Cursor, Copilot o ChatGPT.
 Mantén un tono de colega brillante, maduro y leal.
 """
-    if st.session_state.user_name:
+    if st.session_state.get('user_name'):
         return f"{base_prompt}\n\nDirígete al usuario por su nombre: {st.session_state.user_name}."
     else:
         return base_prompt
@@ -113,69 +163,75 @@ if "messages" not in st.session_state:
     st.session_state.messages = historial
     st.session_state.user_name = nombre_guardado if nombre_guardado else None
 
-# --- MOSTRAR EL HISTORIAL CON BOTÓN PARA ESCUCHAR ---
+# --- SELECCIONAR VOZ EN LA BARRA LATERAL ---
+st.sidebar.title("🎤 Configuración de Voz")
+st.sidebar.markdown("Selecciona la voz para el texto a voz:")
+
+# Obtener las opciones del diccionario (ordenadas alfabéticamente)
+voice_options = sorted(VOICES.keys())
+
+# Inicializar la voz seleccionada en la sesión
+if "selected_voice" not in st.session_state:
+    # Por defecto, la voz femenina de México (Dalia) porque es muy natural
+    st.session_state.selected_voice = "México - Dalia (femenino)"
+
+# Selector de voz
+selected_voice_label = st.sidebar.selectbox(
+    "Elige una voz",
+    options=voice_options,
+    index=voice_options.index(st.session_state.selected_voice)
+)
+st.session_state.selected_voice = selected_voice_label
+
+# Mostrar la voz actual en la barra lateral
+st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
+st.sidebar.markdown("---")
+
+# --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN ---
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        # Si el mensaje es del asistente, añadir botón para escuchar
+        # Si el mensaje es del asistente, añadir un botón para escucharlo
         if msg["role"] == "assistant":
-            # Usamos el índice como clave para el botón (es único)
-            if st.button("🔊 Escuchar", key=f"tts_{idx}"):
-                audio_bytes = text_to_speech(msg["content"])
+            # Crear un botón con una clave única basada en el índice
+            if st.button("🔊 Escuchar", key=f"tts_{idx}_{msg['content'][:30]}"):
+                # Obtener el shortName de la voz seleccionada
+                voice_short = VOICES[st.session_state.selected_voice]
+                audio_bytes = text_to_speech(msg["content"], voice_short)
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
 
-# --- ENTRADA DEL USUARIO Y RESPUESTA (con carga de archivos y audio) ---
-user_input = st.chat_input(
+# --- ENTRADA DEL USUARIO Y RESPUESTA ---
+if user_input := st.chat_input(
     placeholder="¿Qué tienes en mente hoy o qué proyecto estás desarrollando?",
-    accept_file=True,                # Permite subir archivos
-    file_type=["pdf", "jpg", "png", "txt", "csv", "docx"],  # Tipos permitidos
-    accept_audio=True                # Permite grabar audio
-)
-
-if user_input:
-    # Extraer el texto y los archivos adjuntos
-    message_text = user_input.get("text", "")
-    uploaded_files = user_input.get("files", [])
-    # Si hay audio grabado, estará en user_input.get("audio")
-    audio_file = user_input.get("audio")
-
+    accept_file=True,
+    file_type=["pdf", "jpg", "png", "txt", "csv", "docx"],
+    accept_audio=True
+):
     # 1. Si el usuario no tiene nombre guardado, intentar extraerlo del mensaje
     if not st.session_state.user_name:
-        posible_nombre = extract_name(message_text)
+        posible_nombre = extract_name(user_input.get("text", ""))
         if posible_nombre:
             st.session_state.user_name = posible_nombre
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
 
     # 2. Añadir mensaje del usuario al estado
-    # Si hay archivos adjuntos, los mostramos como información adicional
-    if uploaded_files:
-        # Mostrar información de los archivos subidos
-        file_info = "\n\n**Archivos adjuntos:**\n"
-        for file in uploaded_files:
-            file_info += f"- {file.name} ({file.type}, {file.size} bytes)\n"
-        # Añadimos esta información al mensaje del usuario (lo verá la IA)
-        full_user_message = message_text + file_info
-    else:
-        full_user_message = message_text
-
-    st.session_state.messages.append({"role": "user", "content": full_user_message})
+    user_text = user_input.get("text", "")
+    st.session_state.messages.append({"role": "user", "content": user_text})
     with st.chat_message("user"):
-        st.markdown(full_user_message)
+        st.markdown(user_text)
 
     # 3. Preparar la respuesta del asistente
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
-        # Estructurar mensajes para la API de Groq
         system_prompt = get_system_prompt()
         api_messages = [{"role": "user", "content": system_prompt}]
         api_messages.extend(st.session_state.messages)
 
         try:
-            # Llamada a Groq
             response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",  # Modelo estable
+                model="llama-3.3-70b-versatile",
                 messages=api_messages,
                 temperature=0.7
             )
@@ -188,12 +244,6 @@ if user_input:
             
             # 5. Guardar el historial completo y el nombre en Firebase
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
-            
-            # 6. (Opcional) Mostrar el botón "Escuchar" inmediatamente después de la respuesta
-            # Para ello, necesitaríamos un botón en el mismo contenedor, pero es más sencillo
-            # recargar la página para que aparezca el botón en el historial.
-            # Si quieres que aparezca sin recargar, puedes usar st.rerun() al final.
-            st.rerun()  # Esto forzará que se muestre el botón para el nuevo mensaje
             
         except Exception as e:
             st.error(f"Error de conexión con la IA: {str(e)}")
