@@ -77,31 +77,31 @@ def get_groq_models():
     return None
 
 def get_gemini_models():
-    """Devuelve los modelos disponibles de Gemini según la documentación."""
-    # Gemini no tiene un endpoint de listado de modelos como Groq,
-    # pero podemos listar los más comunes y permitir seleccionar.
-    # También podemos intentar listar con genai.list_models() si está disponible.
+    """Devuelve los modelos disponibles de Gemini."""
+    if not GEMINI_API_KEY:
+        return None
     try:
-        if gemini_available:
-            # Intentar obtener modelos de la API
-            models = genai.list_models()
-            chat_models = {}
-            for model in models:
-                if "gemini" in model.name and "generateContent" in model.supported_generation_methods:
-                    model_id = model.name
-                    display_name = model_id.replace("models/", "")
-                    if len(display_name) > 30:
-                        display_name = display_name[:27] + "..."
-                    chat_models[f"🔴 {display_name}"] = model_id
-            return chat_models if chat_models else None
+        models = genai.list_models()
+        chat_models = {}
+        for model in models:
+            if "gemini" in model.name and "generateContent" in model.supported_generation_methods:
+                model_id = model.name.replace("models/", "")
+                display_name = model_id
+                if len(display_name) > 30:
+                    display_name = display_name[:27] + "..."
+                chat_models[f"🔴 {display_name}"] = model_id
+        return chat_models if chat_models else None
     except Exception as e:
         st.sidebar.warning(f"⚠️ Error al obtener modelos de Gemini: {e}")
-    # Fallback a lista manual
+    # Fallback con nombres oficiales
     return {
-        "🔴 Gemini 3.5 Flash": "models/gemini-2.0-flash-exp",
-        "🔴 Gemini 3.6 Flash": "models/gemini-2.0-flash",
-        "🔴 Gemini 3 Pro": "models/gemini-2.0-pro-exp",
-        "🔴 Gemini 3 Flash (latest)": "models/gemini-2.0-flash-lite-preview-02-05",
+        "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
+        "🔴 Gemini 3.1 Flash-Lite": "gemini-3.1-flash-lite",
+        "🔴 Gemini 3.1 Pro (preview)": "gemini-3.1-pro-preview",
+        "🔴 Gemini 3 Flash (preview)": "gemini-3-flash-preview",
+        "🔴 Gemini 2.5 Flash": "gemini-2.5-flash",
+        "🔴 Gemini 2.5 Pro": "gemini-2.5-pro",
+        "🔴 Gemini 2.5 Flash-Lite": "gemini-2.5-flash-lite",
     }
 
 # --- VOCES DISPONIBLES ---
@@ -147,10 +147,14 @@ MODELS = {
     "🟢 Groq Compound Mini": "groq/compound-mini",
     "🟢 Mixtral 8x7B": "mixtral-8x7b-32768",
 
-    # 🔴 Gemini (respaldo)
-    "🔴 Gemini 2.0 Flash": "models/gemini-2.0-flash-exp",
-    "🔴 Gemini 2.0 Flash (latest)": "models/gemini-2.0-flash-lite-preview-02-05",
-    "🔴 Gemini 2.0 Pro": "models/gemini-2.0-pro-exp",
+    # 🔴 Gemini (con nombres oficiales)
+    "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
+    "🔴 Gemini 3.1 Flash-Lite": "gemini-3.1-flash-lite",
+    "🔴 Gemini 3.1 Pro": "gemini-3.1-pro-preview",
+    "🔴 Gemini 3 Flash": "gemini-3-flash-preview",
+    "🔴 Gemini 2.5 Flash": "gemini-2.5-flash",
+    "🔴 Gemini 2.5 Pro": "gemini-2.5-pro",
+    "🔴 Gemini 2.5 Flash-Lite": "gemini-2.5-flash-lite",
 }
 
 # Añadir modelos dinámicos
@@ -295,7 +299,7 @@ def process_uploaded_file(uploaded_file):
             "content": f"Archivo '{file_name}' subido (tipo: {file_type}). No se pudo extraer texto automáticamente."
         }
 
-# --- DIVISIÓN DE TEXTOS LARGOS (con soporte para Gemini) ---
+# --- DIVISIÓN DE TEXTOS LARGOS ---
 def split_text_into_chunks(text, max_chars=1500):
     if len(text) <= max_chars:
         return [text]
@@ -314,7 +318,7 @@ def split_text_into_chunks(text, max_chars=1500):
     return chunks
 
 def call_gemini(model_id, system_prompt, user_text):
-    """Llama a Gemini con un solo mensaje (para texto corto o fragmentos)."""
+    """Llama a Gemini con un solo mensaje."""
     if not GEMINI_API_KEY:
         return "Error: Clave de Gemini no configurada."
     try:
@@ -340,15 +344,14 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
             is_groq = True
             break
     
-    is_gemini = model_id.startswith("models/gemini") or model_id.startswith("gemini")
+    is_gemini = "gemini" in model_id or model_id.startswith("models/gemini")
     
-    # Si es Gemini, usamos un flujo diferente (Gemini maneja contexto largo de forma nativa)
+    # --- Gemini ---
     if is_gemini:
         if not GEMINI_API_KEY:
             return "Error: Cliente de Gemini no disponible."
-        # Gemini puede manejar hasta 1M tokens, pero por seguridad dividimos si es muy largo
         if len(text) > 30000:
-            chunks = split_text_into_chunks(text, max_chars=8000)  # Fragmentos más grandes para Gemini
+            chunks = split_text_into_chunks(text, max_chars=8000)
             st.info(f"📊 Usando Gemini - {len(text)} caracteres → {len(chunks)} partes con pausas de {pause_seconds}s.")
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -371,9 +374,7 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
                     time.sleep(pause_seconds)
             progress_bar.empty()
             status_text.empty()
-            # Combinar respuestas
             combined = "\n\n".join(partial_responses)
-            # Generar resumen final
             summary_prompt = f"""
             He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL.
             Organiza tu respuesta en estas secciones:
@@ -388,10 +389,9 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
             """
             return call_gemini(model_id, system_prompt, summary_prompt)
         else:
-            # Texto corto para Gemini: procesar directamente
             return call_gemini(model_id, system_prompt, text)
     
-    # --- A partir de aquí, lógica para Groq (igual que antes) ---
+    # --- Groq ---
     if is_groq and not groq_client:
         st.error("❌ Cliente de Groq no disponible.")
         return "Error: Cliente de Groq no disponible."
