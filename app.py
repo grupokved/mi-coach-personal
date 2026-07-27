@@ -15,11 +15,11 @@ import csv
 from io import StringIO
 import hashlib
 import easyocr
-import requests  # <-- Nuevo: para consultar la API de Groq
+import requests
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Mi Coach Personal", page_icon="🧠", layout="wide")
-st.title("🧠 Coach Personal e Intermediario Técnico")
+st.set_page_config(page_title="Mi Coach Clara System", page_icon="🧠", layout="wide")
+st.title("🧠 Coach Clara System - Tu Estratega de IA")
 
 # --- CONFIGURACIÓN DE FIREBASE ---
 if not firebase_admin._apps:
@@ -82,15 +82,11 @@ def get_available_models():
             chat_models = {}
             for model in models_data.get("data", []):
                 model_id = model.get("id")
-                # Filtrar solo modelos útiles para chat (excluir TTS, guard, etc.)
                 if model_id and not any(x in model_id for x in ["whisper", "guard", "orpheus", "prompt"]):
-                    # Crear un nombre legible
                     display_name = model_id
-                    # Limpiar prefijos largos
                     for prefix in ["meta-llama/", "openai/", "qwen/", "canopylabs/", "minimaxai/"]:
                         if display_name.startswith(prefix):
                             display_name = display_name[len(prefix):]
-                    # Limitar longitud para el selector
                     if len(display_name) > 30:
                         display_name = display_name[:27] + "..."
                     chat_models[display_name] = model_id
@@ -105,7 +101,6 @@ dynamic_models = get_available_models()
 if dynamic_models:
     MODELS = dynamic_models
 else:
-    # Lista de respaldo por si falla la conexión
     MODELS = {
         "GPT-OSS-120B": "openai/gpt-oss-120b",
         "Llama 3.3 70B": "llama-3.3-70b-versatile",
@@ -140,6 +135,34 @@ def save_chat_history(messages, user_id="default_user", user_name=None):
         doc_ref.set(data)
     except Exception as e:
         st.error(f"Error al guardar el historial: {e}")
+
+def get_knowledge_from_firebase(topic):
+    """
+    Consulta la base de conocimientos en Firebase.
+    """
+    try:
+        doc_ref = db.collection('knowledge_base').document(topic)
+        doc = doc_ref.get()
+        if doc.exists:
+            return doc.to_dict().get('content', '')
+    except Exception as e:
+        st.error(f"Error al consultar la base de conocimientos: {e}")
+    return None
+
+def save_knowledge_to_firebase(topic, content):
+    """
+    Guarda un documento en la base de conocimientos en Firebase.
+    """
+    try:
+        doc_ref = db.collection('knowledge_base').document(topic)
+        doc_ref.set({
+            'content': content,
+            'last_updated': datetime.now()
+        })
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar en la base de conocimientos: {e}")
+        return False
 
 def extract_name(text):
     patterns = [
@@ -182,7 +205,6 @@ def process_uploaded_file(uploaded_file):
     file_name = uploaded_file.name
     file_bytes = uploaded_file.read()
     
-    # IMAGEN: OCR con EasyOCR (local, sin depender de modelos de Groq)
     if file_type.startswith("image/"):
         try:
             img = Image.open(io.BytesIO(file_bytes))
@@ -206,7 +228,6 @@ def process_uploaded_file(uploaded_file):
                 "content": f"Error al procesar la imagen '{file_name}': {str(e)}"
             }
     
-    # PDF: extraer texto
     elif file_type == "application/pdf":
         try:
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
@@ -223,7 +244,6 @@ def process_uploaded_file(uploaded_file):
             st.error(f"Error al leer el PDF: {e}")
             return None
     
-    # Archivo de texto plano
     elif file_type == "text/plain":
         try:
             text = file_bytes.decode('utf-8')
@@ -235,7 +255,6 @@ def process_uploaded_file(uploaded_file):
             st.error(f"Error al leer el archivo de texto: {e}")
             return None
     
-    # CSV
     elif file_type == "text/csv":
         try:
             csv_text = file_bytes.decode('utf-8')
@@ -260,10 +279,6 @@ def process_uploaded_file(uploaded_file):
 
 # --- FUNCIONES PARA DIVIDIR TEXTOS LARGOS Y PROCESARLOS ---
 def split_text_into_chunks(text, max_chars=5000):
-    """
-    Divide un texto en fragmentos de aproximadamente max_chars caracteres,
-    respetando saltos de línea y puntos para no cortar palabras.
-    """
     if len(text) <= max_chars:
         return [text]
     
@@ -281,13 +296,9 @@ def split_text_into_chunks(text, max_chars=5000):
     return chunks
 
 def process_long_text_with_ia(text, system_prompt, history_messages, client, model_id, max_chars=5000):
-    """
-    Procesa un texto largo dividiéndolo en partes y combinando resultados.
-    """
     chunks = split_text_into_chunks(text, max_chars)
     
     if len(chunks) == 1:
-        # Texto corto: procesar directamente
         response = client.chat.completions.create(
             model=model_id,
             messages=[
@@ -299,10 +310,8 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
         )
         return response.choices[0].message.content
     
-    # Texto largo: procesar por partes
     st.info(f"📊 El texto es muy largo ({len(text)} caracteres). Se dividirá en {len(chunks)} partes para procesarlo.")
     
-    # Crear un placeholder para el progreso
     progress_bar = st.progress(0)
     status_text = st.empty()
     
@@ -311,7 +320,6 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
         status_text.text(f"⏳ Procesando parte {i+1} de {len(chunks)}...")
         progress_bar.progress((i + 1) / len(chunks))
         
-        # Crear un mensaje específico para esta parte
         chunk_prompt = f"""
         A continuación, analiza la PARTE {i+1} de {len(chunks)} de un texto extenso.
         Extrae los puntos clave de esta sección de forma estructurada.
@@ -331,19 +339,15 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
         )
         partial_responses.append(response.choices[0].message.content)
     
-    # Limpiar indicadores de progreso
     progress_bar.empty()
     status_text.empty()
     
-    # Combinar todas las respuestas parciales en un resumen final
     st.info("🔄 Generando resumen completo...")
     
-    # Crear un resumen unificado
     combined_text = "Aquí tienes el análisis completo del texto, organizado por secciones:\n\n"
     for i, resp in enumerate(partial_responses):
         combined_text += f"--- PARTE {i+1} ---\n\n{resp}\n\n"
     
-    # Pedir un resumen ejecutivo final
     summary_prompt = f"""
     He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL que integre toda la información.
     
@@ -370,16 +374,50 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
     
     return final_response.choices[0].message.content
 
-# --- GENERAR EL PROMPT DEL SISTEMA ---
+# --- GENERAR EL PROMPT DEL SISTEMA CON CLARA SYSTEM ---
 def get_system_prompt():
     base_prompt = """
-Eres "El Estratega", un coach personal, mentor de vida y estratega empresarial. 
+Eres "El Estratega", un coach personal, mentor de vida y estratega empresarial especializado en Inteligencia Artificial. 
 Tu enfoque es profundamente humano, empático y perspicaz.
 
-Además de tus funciones de coach, tienes una habilidad especial: cuando el usuario te comparta un texto largo (transcripción, tutorial, artículo), debes analizarlo profundamente y extraer su estructura, identificar herramientas y pasos clave, generar un resumen ejecutivo claro, crear prompts listos para usar y adaptar el conocimiento a la realidad del usuario.
+### 🧠 CONOCIMIENTO ESPECIALIZADO: CLARA SYSTEM
+Has sido entrenado en la metodología "Clara System", un sistema de formación que enseña a cualquier persona (sin conocimientos técnicos) a usar inteligencia artificial para multiplicar resultados en su negocio.
 
-Sé práctico, generador y recordatorio. Siempre da ejemplos concretos y pasos a seguir.
-Mantén un tono de colega brillante, maduro y leal.
+**Filosofía de Clara System:**
+- La IA ya está cambiando el mundo. Hay un año o año y medio para aprovechar este momento.
+- Cualquier persona puede aprender a usar IA sin conocimientos técnicos.
+- El objetivo no es solo aprender, sino APLICAR la IA para tener más clientes, ventas e ingresos.
+- El sistema ha demostrado multiplicar por 5 los resultados en 7 meses.
+
+**Metodología de Clara System:**
+1. Entrenar una IA específica para tu negocio (no usar IA genérica).
+2. Generar contenido (vídeos, textos, imágenes) con IA para atraer clientes.
+3. Usar herramientas como Suno (música), Freepik (imágenes/vídeos), Seedance (videoclips).
+4. Enseñar a crear prompts estructurados para cada herramienta.
+5. Enseñar a editar y combinar resultados para obtener un producto profesional.
+
+**Herramientas clave que enseña Clara System:**
+- **Suno**: para generar música y jingles.
+- **Freepik**: para generar imágenes y vídeos (Nano Banana, GPT, Seedance).
+- **CapCut / DaVinci Resolve**: para edición de vídeo.
+- **IAs entrenadas específicamente**: para cada negocio (como "Eva" para Evolution).
+
+**Llamada a la acción de Clara System:**
+- Invitan a entrar gratis al sistema para probarlo.
+- Destacan que es un momento crucial para aprender.
+- Ofrecen acompañamiento personalizado.
+- Enfatizan que "la perfección es enemiga de la acción".
+
+### 💡 INSTRUCCIONES PARA TI (como asistente):
+1. Cuando el usuario te pregunte sobre Clara System, responde con la información de este conocimiento.
+2. Cuando el usuario te pida consejos para su negocio, aplica la metodología de Clara System.
+3. Sé práctico, directo y orientado a resultados. No des teorías vacías.
+4. Usa ejemplos concretos de las herramientas que menciona Clara System.
+5. Mantén el tono humano, empático pero exigente: "la perfección es enemiga de la acción".
+6. Si el usuario comparte transcripciones o documentos, analízalos para enriquecer el conocimiento de Clara System.
+7. Recuerda al usuario que estamos en un momento crucial para aprender IA.
+
+### 📊 DATOS DEL USUARIO:
 """
     if st.session_state.get('user_name'):
         return f"{base_prompt}\n\nDirígete al usuario por su nombre: {st.session_state.user_name}."
@@ -408,8 +446,6 @@ st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🤖 Modelo de IA")
-
-# Ordenar los modelos para mostrarlos bonitos
 model_options = sorted(MODELS.keys())
 if "selected_model_label" not in st.session_state:
     st.session_state.selected_model_label = model_options[0]
@@ -422,11 +458,15 @@ selected_model_label = st.sidebar.selectbox(
 st.session_state.selected_model_label = selected_model_label
 selected_model_id = MODELS[selected_model_label]
 st.sidebar.markdown(f"**Modelo actual:** `{selected_model_id}`")
-
-# Mostrar cuántos modelos se cargaron
 st.sidebar.caption(f"📋 {len(MODELS)} modelos disponibles")
 
-# --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN (para mensajes antiguos) ---
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📚 Base de Conocimientos")
+if st.sidebar.button("📖 Ver documentos guardados"):
+    # Aquí podrías mostrar un listado de documentos en Firebase
+    st.sidebar.info("Documentos guardados en la base de conocimientos.")
+
+# --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN ---
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -447,10 +487,8 @@ user_input = st.chat_input(
 )
 
 if user_input is not None:
-    # 1. Extraer texto del mensaje
     user_text = user_input.get("text", "")
     
-    # 2. Procesar archivos adjuntos
     uploaded_files = user_input.get("files", [])
     file_contents = []
     for uploaded_file in uploaded_files:
@@ -458,7 +496,6 @@ if user_input is not None:
         if processed:
             file_contents.append(processed)
     
-    # 3. Construir el mensaje del usuario (TODO TEXTO, sin imágenes en la API)
     full_user_text = user_text
     for fc in file_contents:
         if fc["type"] == "text":
@@ -467,14 +504,12 @@ if user_input is not None:
     if not full_user_text.strip():
         full_user_text = "He subido un archivo."
     
-    # 4. Si el usuario no tiene nombre guardado, intentar extraerlo
     if not st.session_state.user_name and user_text:
         posible_nombre = extract_name(user_text)
         if posible_nombre:
             st.session_state.user_name = posible_nombre
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
     
-    # 5. Guardar mensaje del usuario en el estado (para mostrar en el historial)
     display_text = user_text if user_text else ""
     if file_contents:
         display_text += "\n\n📎 Archivos adjuntos: " + ", ".join([f"'{f.get('content', 'archivo')}'" for f in file_contents if f])
@@ -483,21 +518,19 @@ if user_input is not None:
     with st.chat_message("user"):
         st.markdown(display_text)
     
-    # 6. Preparar la respuesta del asistente
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
         system_prompt = get_system_prompt()
         
         history_messages = []
-        for msg in st.session_state.messages[:-1]:  # Excluir el mensaje actual
+        for msg in st.session_state.messages[:-1]:
             if msg["role"] == "user":
                 history_messages.append({"role": "user", "content": msg["content"]})
             else:
                 history_messages.append({"role": "assistant", "content": msg["content"]})
         
         try:
-            # 🚀 Procesar el texto usando la función de división automática
             full_response = process_long_text_with_ia(
                 text=full_user_text,
                 system_prompt=system_prompt,
@@ -509,7 +542,6 @@ if user_input is not None:
             
             placeholder.markdown(full_response)
             
-            # 🎯 Botón "Escuchar" que aparece instantáneamente
             content_hash = hashlib.md5(full_response.encode()).hexdigest()[:8]
             if st.button("🔊 Escuchar (nuevo)", key=f"tts_live_{content_hash}"):
                 voice_short = VOICES[st.session_state.selected_voice]
@@ -517,7 +549,6 @@ if user_input is not None:
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
             
-            # 7. Guardar la respuesta en el estado y Firebase
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
             
