@@ -6,3 +6,4 @@ PyPDF2
 Pillow
 easyocr
 torch
+requests
