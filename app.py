@@ -25,7 +25,6 @@ Manten un tono de colega brillante, maduro y leal.
 """
 
 if "messages" not in list.session_state:
-    # Para DeepSeek-R1 iniciamos el historial limpio para evitar conflictos de sistema
     list.session_state.messages = []
 
 # Mostrar el historial en pantalla
@@ -34,7 +33,6 @@ for message in list.session_state.messages:
         list.markdown(message["content"])
 
 if user_input := list.chat_input("¿Qué tienes en mente hoy o qué proyecto estás desarrollando?"):
-    # Guardamos el mensaje del usuario
     list.session_state.messages.append({"role": "user", "content": user_input})
     with list.chat_message("user"):
         list.markdown(user_input)
@@ -42,7 +40,7 @@ if user_input := list.chat_input("¿Qué tienes en mente hoy o qué proyecto est
     with list.chat_message("assistant"):
         message_placeholder = list.empty()
         
-        # Inyectamos las instrucciones del coach de manera amigable para el modelo de razonamiento
+        # Estructurar los mensajes de forma limpia para DeepSeek-R1
         mensajes_para_api = [{"role": "user", "content": f"{PROMPT_SISTEMA}\n\nMensaje del usuario: {msg['content']}" if i == 0 else msg['content']} 
                              for i, msg in enumerate(list.session_state.messages)]
         
@@ -51,10 +49,17 @@ if user_input := list.chat_input("¿Qué tienes en mente hoy o qué proyecto est
                 model="DeepSeek-R1-0528",
                 messages=mensajes_para_api,
                 temperature=0.6,
-                max_tokens=4000 # Evita que el servidor corte el pensamiento a la mitad
+                max_tokens=4000
             )
             
-            full_response = response.choices[0].message.content
+            # CORRECCIÓN DEfINITIVA: Extraer el texto de forma segura sin importar el formato de la API
+            if hasattr(response, 'choices') and len(response.choices) > 0:
+                full_response = response.choices[0].message.content
+            elif hasattr(response, 'content'):
+                full_response = response.content
+            else:
+                full_response = str(response)
+                
             message_placeholder.markdown(full_response)
             list.session_state.messages.append({"role": "assistant", "content": full_response})
             
