@@ -5,16 +5,16 @@ from openai import OpenAI
 list.set_page_config(page_title="Mi Coach DeepSeek", page_icon="🧠", layout="centered")
 list.title("🧠 Coach Personal e Intermediario Técnico")
 
-# Recoge la clave de SiliconFlow guardada de forma segura
+# Recoge la clave de Groq guardada de forma segura
 API_KEY = os.environ.get("GITHUB_TOKEN")
 
 if not API_KEY:
     list.error("Falta configurar la variable de autenticación en Secrets.")
     list.stop()
 
-# Conexión directa a los servidores estables de SiliconFlow
+# Conexión directa a los servidores de Groq
 client = OpenAI(
-    base_url="https://api.siliconflow.cn/v1",
+    base_url="https://groq.com",
     api_key=API_KEY,
 )
 
@@ -47,10 +47,9 @@ if user_input := list.chat_input("¿Qué tienes en mente hoy o qué proyecto est
         
         try:
             response = client.chat.completions.create(
-                model="deepseek-ai/DeepSeek-R1", # El modelo R1 oficial completo y gratis
+                model="deepseek-r1-distill-llama-70b", # Modelo oficial DeepSeek R1 en Groq
                 messages=mensajes_para_api,
-                temperature=0.6,
-                max_tokens=4000
+                temperature=0.6
             )
             
             full_response = response.choices[0].message.content
@@ -58,4 +57,4 @@ if user_input := list.chat_input("¿Qué tienes en mente hoy o qué proyecto est
             list.session_state.messages.append({"role": "assistant", "content": full_response})
             
         except Exception as e:
-            list.error(f"Error de comunicación con la IA: {str(e)}")
+            list.error(f"Error de conexión con la IA: {str(e)}")
