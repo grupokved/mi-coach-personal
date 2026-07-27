@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 from groq import Groq
+from openai import OpenAI  # Para SiliconFlow
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
@@ -34,15 +35,75 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
-# --- CONFIGURACIÓN DE GROQ ---
-API_KEY = os.environ.get("GITHUB_TOKEN")
-if not API_KEY:
+# --- CONFIGURACIÓN DE APIS ---
+GROQ_API_KEY = os.environ.get("GITHUB_TOKEN")
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_TOKEN")  # <--- Nueva variable de entorno
+
+if not GROQ_API_KEY:
     st.error("⚠️ Falta la clave de API de Groq en los Secrets.")
     st.stop()
 
-client = Groq(api_key=API_KEY)
+# Inicializar clientes
+groq_client = Groq(api_key=GROQ_API_KEY)
 
-# --- DICCIONARIO DE VOCES DISPONIBLES EN ESPAÑOL ---
+if SILICONFLOW_API_KEY:
+    siliconflow_client = OpenAI(
+        api_key=SILICONFLOW_API_KEY,
+        base_url="https://api.siliconflow.cn/v1"
+    )
+else:
+    siliconflow_client = None
+    st.sidebar.warning("⚠️ No se encontró SILICONFLOW_TOKEN. Solo funcionarán modelos de Groq.")
+
+# --- FUNCIÓN PARA OBTENER MODELOS DE CADA PROVEEDOR ---
+def get_groq_models():
+    """Obtiene modelos de Groq desde su API."""
+    try:
+        url = "https://api.groq.com/openai/v1/models"
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            models_data = response.json()
+            chat_models = {}
+            for model in models_data.get("data", []):
+                model_id = model.get("id")
+                if model_id and not any(x in model_id for x in ["whisper", "guard", "orpheus", "prompt"]):
+                    display_name = model_id
+                    for prefix in ["meta-llama/", "openai/", "qwen/", "canopylabs/", "minimaxai/"]:
+                        if display_name.startswith(prefix):
+                            display_name = display_name[len(prefix):]
+                    if len(display_name) > 30:
+                        display_name = display_name[:27] + "..."
+                    chat_models[f"🟢 {display_name}"] = model_id
+            return chat_models
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Error al obtener modelos de Groq: {e}")
+    return None
+
+def get_siliconflow_models():
+    """Obtiene modelos de SiliconFlow desde su API."""
+    if not SILICONFLOW_API_KEY:
+        return None
+    try:
+        url = "https://api.siliconflow.cn/v1/models"
+        headers = {"Authorization": f"Bearer {SILICONFLOW_API_KEY}"}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            models_data = response.json()
+            chat_models = {}
+            for model in models_data.get("data", []):
+                model_id = model.get("id")
+                if model_id and not any(x in model_id for x in ["embedding", "whisper"]):
+                    display_name = model_id
+                    if len(display_name) > 30:
+                        display_name = display_name[:27] + "..."
+                    chat_models[f"🔵 {display_name}"] = model_id
+            return chat_models
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Error al obtener modelos de SiliconFlow: {e}")
+    return None
+
+# --- DICCIONARIO DE VOCES ---
 VOICES = {
     "España - Elvira (femenino)": "es-ES-ElviraNeural",
     "España - Álvaro (masculino)": "es-ES-AlvaroNeural",
@@ -69,44 +130,24 @@ VOICES = {
     "Venezuela - Paola (femenino)": "es-VE-PaolaNeural",
 }
 
-# --- FUNCIÓN PARA OBTENER MODELOS DINÁMICAMENTE DESDE GROQ ---
-def get_available_models():
-    try:
-        url = "https://api.groq.com/openai/v1/models"
-        headers = {"Authorization": f"Bearer {API_KEY}"}
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            models_data = response.json()
-            chat_models = {}
-            for model in models_data.get("data", []):
-                model_id = model.get("id")
-                if model_id and not any(x in model_id for x in ["whisper", "guard", "orpheus", "prompt"]):
-                    display_name = model_id
-                    for prefix in ["meta-llama/", "openai/", "qwen/", "canopylabs/", "minimaxai/"]:
-                        if display_name.startswith(prefix):
-                            display_name = display_name[len(prefix):]
-                    if len(display_name) > 30:
-                        display_name = display_name[:27] + "..."
-                    chat_models[display_name] = model_id
-            return chat_models
-    except Exception as e:
-        st.sidebar.warning(f"⚠️ No se pudo obtener la lista de modelos: {e}")
-    return None
+# --- OBTENER TODOS LOS MODELOS ---
+groq_models = get_groq_models()
+siliconflow_models = get_siliconflow_models()
 
-# --- OBTENER MODELOS ---
-dynamic_models = get_available_models()
-if dynamic_models:
-    MODELS = dynamic_models
-else:
+MODELS = {}
+if groq_models:
+    MODELS.update(groq_models)
+if siliconflow_models:
+    MODELS.update(siliconflow_models)
+
+if not MODELS:
+    # Fallback a modelos manuales
     MODELS = {
-        "GPT-OSS-120B": "openai/gpt-oss-120b",
-        "Llama 3.3 70B": "llama-3.3-70b-versatile",
-        "Llama 3.1 8B": "llama-3.1-8b-instant",
-        "GPT-OSS 20B": "openai/gpt-oss-20b",
-        "Qwen 3.6 27B": "qwen/qwen3.6-27b",
-        "Groq Compound": "groq/compound",
-        "Groq Compound Mini": "groq/compound-mini",
-        "Mixtral 8x7B": "mixtral-8x7b-32768",
+        "🟢 Llama 3.3 70B": "llama-3.3-70b-versatile",
+        "🟢 Llama 3.1 8B": "llama-3.1-8b-instant",
+        "🟢 GPT-OSS 120B": "openai/gpt-oss-120b",
+        "🔵 DeepSeek-V3": "deepseek-ai/DeepSeek-V3",
+        "🔵 Qwen 2.5 72B": "Qwen/Qwen2.5-72B-Instruct",
     }
 
 # --- FUNCIONES PARA FIREBASE ---
@@ -132,28 +173,6 @@ def save_chat_history(messages, user_id="default_user", user_name=None):
         doc_ref.set(data)
     except Exception as e:
         st.error(f"Error al guardar el historial: {e}")
-
-def get_knowledge_from_firebase(topic):
-    try:
-        doc_ref = db.collection('knowledge_base').document(topic)
-        doc = doc_ref.get()
-        if doc.exists:
-            return doc.to_dict().get('content', '')
-    except Exception as e:
-        st.error(f"Error al consultar la base de conocimientos: {e}")
-    return None
-
-def save_knowledge_to_firebase(topic, content):
-    try:
-        doc_ref = db.collection('knowledge_base').document(topic)
-        doc_ref.set({
-            'content': content,
-            'last_updated': datetime.now()
-        })
-        return True
-    except Exception as e:
-        st.error(f"Error al guardar en la base de conocimientos: {e}")
-        return False
 
 def extract_name(text):
     patterns = [
@@ -185,7 +204,7 @@ def text_to_speech(text, voice):
     asyncio.set_event_loop(loop)
     return loop.run_until_complete(text_to_speech_async(text, voice))
 
-# --- OCR LOCAL CON EASYOCR ---
+# --- OCR LOCAL ---
 @st.cache_resource
 def get_ocr_reader():
     return easyocr.Reader(['es', 'en'], gpu=False)
@@ -267,7 +286,7 @@ def process_uploaded_file(uploaded_file):
             "content": f"Archivo '{file_name}' subido (tipo: {file_type}). No se pudo extraer texto automáticamente."
         }
 
-# --- DIVISIÓN DE TEXTOS LARGOS Y PROCESAMIENTO CON PAUSAS ---
+# --- DIVISIÓN DE TEXTOS LARGOS ---
 def split_text_into_chunks(text, max_chars=1500):
     if len(text) <= max_chars:
         return [text]
@@ -285,26 +304,76 @@ def split_text_into_chunks(text, max_chars=1500):
         chunks.append(current_chunk.strip())
     return chunks
 
-def process_long_text_with_ia(text, system_prompt, history_messages, client, model_id, max_chars=1500, pause_seconds=3):
+def process_long_text_with_ia(text, system_prompt, history_messages, model_id, max_chars=1500, pause_seconds=3):
     """
     Procesa un texto largo dividiéndolo en partes con pausas,
     y genera un resumen final sin exceder el límite de tamaño de solicitud.
+    Soporta tanto Groq como SiliconFlow.
     """
     chunks = split_text_into_chunks(text, max_chars)
     
+    # Determinar qué cliente usar basado en el modelo seleccionado
+    # Si el modelo tiene prefijo "🟢" es Groq, si tiene "🔵" es SiliconFlow
+    # Si viene de la lista dinámica, podemos detectar por el prefijo en el nombre
+    # Pero usaremos una lógica más robusta: probar ambos clientes
+    
+    # Intentar determinar el proveedor por el modelo ID
+    is_groq = False
+    is_siliconflow = False
+    
+    # Lista de modelos conocidos de Groq (filtro por prefijo común)
+    groq_prefixes = ["llama-", "mixtral-", "gemma-", "openai/gpt-oss", "meta-llama/", "qwen/qwen"]
+    siliconflow_prefixes = ["deepseek-ai/", "Qwen/", "THUDM/", "01-ai/", "mistralai/", "google/"]
+    
+    for prefix in groq_prefixes:
+        if model_id.startswith(prefix):
+            is_groq = True
+            break
+    
+    # Si no es Groq, asumir que es SiliconFlow
+    if not is_groq:
+        is_siliconflow = True
+    
+    # Si no hay cliente para el proveedor, mostrar error
+    if is_groq and not groq_client:
+        st.error("❌ Cliente de Groq no disponible.")
+        return "Error: Cliente de Groq no disponible."
+    
+    if is_siliconflow and not siliconflow_client:
+        st.error("❌ Cliente de SiliconFlow no disponible. Verifica que SILICONFLOW_TOKEN esté configurado.")
+        return "Error: Cliente de SiliconFlow no disponible."
+    
+    # Seleccionar el cliente correcto
+    client = groq_client if is_groq else siliconflow_client
+    
     if len(chunks) == 1:
-        response = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                *history_messages,
-                {"role": "user", "content": text}
-            ],
-            temperature=0.7
-        )
+        # Si es Groq, usar la librería de Groq; si es SiliconFlow, usar OpenAI
+        if is_groq:
+            response = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    *history_messages,
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.7
+            )
+        else:
+            # SiliconFlow usa la misma estructura
+            response = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    *history_messages,
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.7
+            )
         return response.choices[0].message.content
     
-    st.info(f"📊 El texto tiene {len(text)} caracteres. Se dividirá en {len(chunks)} partes con pausas de {pause_seconds}s.")
+    # Texto largo: procesar por partes con pausas
+    provider_name = "Groq" if is_groq else "SiliconFlow"
+    st.info(f"📊 Usando {provider_name} - El texto tiene {len(text)} caracteres. Se dividirá en {len(chunks)} partes con pausas de {pause_seconds}s.")
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -324,14 +393,24 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
         """
         
         try:
-            response = client.chat.completions.create(
-                model=model_id,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": chunk_prompt}
-                ],
-                temperature=0.7
-            )
+            if is_groq:
+                response = client.chat.completions.create(
+                    model=model_id,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": chunk_prompt}
+                    ],
+                    temperature=0.7
+                )
+            else:
+                response = client.chat.completions.create(
+                    model=model_id,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": chunk_prompt}
+                    ],
+                    temperature=0.7
+                )
             partial_responses.append(response.choices[0].message.content)
         except Exception as e:
             st.error(f"Error en la parte {i+1}: {e}")
@@ -350,7 +429,7 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
     
     st.info("🔄 Generando resumen completo...")
     
-    # Truncar respuestas parciales para evitar solicitud demasiado grande
+    # Truncar respuestas parciales
     truncated_parts = []
     for resp in partial_responses:
         if len(resp) > 2000:
@@ -382,18 +461,28 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
     {combined_text}
     """
     
-    final_response = client.chat.completions.create(
-        model=model_id,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": summary_prompt}
-        ],
-        temperature=0.7
-    )
+    if is_groq:
+        final_response = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": summary_prompt}
+            ],
+            temperature=0.7
+        )
+    else:
+        final_response = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": summary_prompt}
+            ],
+            temperature=0.7
+        )
     
     return final_response.choices[0].message.content
 
-# --- PROMPT DEL SISTEMA CON CLARA SYSTEM ---
+# --- PROMPT DEL SISTEMA ---
 def get_system_prompt():
     base_prompt = """
 Eres "El Estratega", un coach personal, mentor de vida y estratega empresarial especializado en Inteligencia Artificial. 
@@ -441,15 +530,17 @@ Has sido entrenado en la metodología "Clara System", un sistema de formación q
     else:
         return base_prompt
 
-# --- INICIALIZAR EL ESTADO DE LA SESIÓN ---
+# --- INICIALIZAR ESTADO DE SESIÓN ---
 if "messages" not in st.session_state:
     historial, nombre_guardado = load_chat_history()
     st.session_state.messages = historial
     st.session_state.user_name = nombre_guardado if nombre_guardado else None
 
-# --- BARRA LATERAL: VOZ Y MODELO ---
+# --- BARRA LATERAL ---
 st.sidebar.title("⚙️ Configuración")
-st.sidebar.markdown("### 🎤 Voz para texto a voz")
+
+# Selector de Voz
+st.sidebar.markdown("### 🎤 Voz")
 voice_options = sorted(VOICES.keys())
 if "selected_voice" not in st.session_state:
     st.session_state.selected_voice = "México - Dalia (femenino)"
@@ -462,6 +553,8 @@ st.session_state.selected_voice = selected_voice_label
 st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
 
 st.sidebar.markdown("---")
+
+# Selector de Modelo (combinado: Groq + SiliconFlow)
 st.sidebar.markdown("### 🤖 Modelo de IA")
 model_options = sorted(MODELS.keys())
 if "selected_model_label" not in st.session_state:
@@ -474,10 +567,19 @@ selected_model_label = st.sidebar.selectbox(
 )
 st.session_state.selected_model_label = selected_model_label
 selected_model_id = MODELS[selected_model_label]
-st.sidebar.markdown(f"**Modelo actual:** `{selected_model_id}`")
-st.sidebar.caption(f"📋 {len(MODELS)} modelos disponibles")
 
-# --- MOSTRAR HISTORIAL CON BOTÓN DE VOZ ---
+# Mostrar proveedor del modelo seleccionado
+if selected_model_label.startswith("🟢"):
+    st.sidebar.info("**Proveedor:** Groq")
+elif selected_model_label.startswith("🔵"):
+    st.sidebar.info("**Proveedor:** SiliconFlow")
+else:
+    st.sidebar.info("**Proveedor:** Desconocido")
+
+st.sidebar.markdown(f"**Modelo:** `{selected_model_id}`")
+st.sidebar.caption(f"📋 {len(MODELS)} modelos disponibles (Groq + SiliconFlow)")
+
+# --- MOSTRAR HISTORIAL ---
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -489,7 +591,7 @@ for idx, msg in enumerate(st.session_state.messages):
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
 
-# --- ENTRADA DEL USUARIO Y RESPUESTA ---
+# --- ENTRADA DEL USUARIO ---
 user_input = st.chat_input(
     placeholder="¿Qué tienes en mente hoy? (Puedes subir imágenes, PDFs, etc.)",
     accept_file=True,
@@ -546,7 +648,6 @@ if user_input is not None:
                 text=full_user_text,
                 system_prompt=system_prompt,
                 history_messages=history_messages,
-                client=client,
                 model_id=selected_model_id,
                 max_chars=1500,
                 pause_seconds=3
