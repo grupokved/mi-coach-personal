@@ -52,7 +52,7 @@ if user_input := st.chat_input("¿Qué tienes en mente hoy o qué proyecto está
         try:
             # Llamada al modelo ESTABLE de DeepSeek en Groq
             response = client.chat.completions.create(
-                model="deepseek-r1-distill-qwen-32b",  # ¡Este es el que SÍ funciona hoy!
+                model="deepseek-r1-distill-llama-70b",  # ¡Este es el que SÍ funciona hoy!
                 messages=api_messages,
                 temperature=0.7
             )
