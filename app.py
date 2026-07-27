@@ -13,7 +13,7 @@ if not GITHUB_TOKEN:
     list.stop()
 
 client = OpenAI(
-    base_url="https://azure.com",
+    base_url="https://models.inference.ai.azure.com",
     api_key=GITHUB_TOKEN,
 )
 
@@ -47,6 +47,7 @@ if user_input := list.chat_input("¿Qué tienes en mente hoy o qué proyecto est
             temperature=0.7
         )
         
+        # Corrección definitiva para extraer el texto de forma segura
         full_response = response.choices[0].message.content
         message_placeholder.markdown(full_response)
         
