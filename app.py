@@ -14,6 +14,7 @@ import PyPDF2
 import csv
 from io import StringIO
 import hashlib
+import easyocr  # Para OCR de imágenes sin Tesseract
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Mi Coach Personal", page_icon="🧠", layout="wide")
@@ -66,14 +67,11 @@ VOICES = {
     "Venezuela - Paola (femenino)": "es-VE-PaolaNeural",
 }
 
-# --- MODELOS DISPONIBLES PARA EL CHAT ---
-CHAT_MODELS = {
+# --- MODELOS DISPONIBLES (los que funcionan según tu lista) ---
+MODELS = {
     "GPT-OSS-120B (razonamiento)": "openai/gpt-oss-120b",
     "Llama 3.3 70B (rápido)": "llama-3.3-70b-versatile",
 }
-
-# --- MODELO PARA VISIÓN (OCR) ---
-VISION_MODEL = "qwen/qwen3.6-27b"
 
 # --- FUNCIONES PARA FIREBASE ---
 def load_chat_history(user_id="default_user"):
@@ -129,56 +127,40 @@ def text_to_speech(text, voice):
     asyncio.set_event_loop(loop)
     return loop.run_until_complete(text_to_speech_async(text, voice))
 
-# --- FUNCIÓN PARA PROCESAR IMAGEN CON VISION MODEL ---
-def process_image_with_vision(image_bytes, mime_type, user_prompt="Extrae todo el texto de esta imagen."):
-    """Envía la imagen al modelo de visión qwen/qwen3.6-27b y devuelve la descripción/OCR."""
-    try:
-        # Codificar la imagen a base64
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-        data_url = f"data:{mime_type};base64,{base64_image}"
-        
-        # Llamar al modelo de visión
-        completion = client.chat.completions.create(
-            model=VISION_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": user_prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": data_url
-                            }
-                        }
-                    ]
-                }
-            ],
-            temperature=0.7,
-            max_completion_tokens=1024,
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        return f"Error al procesar la imagen con el modelo de visión: {str(e)}"
+# --- FUNCIÓN PARA OCR LOCAL CON EASYOCR ---
+@st.cache_resource
+def get_ocr_reader():
+    return easyocr.Reader(['es', 'en'], gpu=False)
 
-# --- FUNCIÓN PARA PROCESAR ARCHIVOS SUBIDOS ---
 def process_uploaded_file(uploaded_file):
-    """Procesa archivos: imágenes, PDFs, TXT, CSV."""
+    """Procesa el archivo subido usando OCR local (EasyOCR) o extracción de texto."""
     file_type = uploaded_file.type
     file_name = uploaded_file.name
     file_bytes = uploaded_file.read()
     
-    # IMAGEN: se procesará en la lógica principal (porque necesita el prompt del usuario)
+    # IMAGEN: OCR con EasyOCR (local, sin depender de modelos de Groq)
     if file_type.startswith("image/"):
-        return {
-            "type": "image",
-            "mime_type": file_type,
-            "data": file_bytes,
-            "name": file_name
-        }
+        try:
+            img = Image.open(io.BytesIO(file_bytes))
+            reader = get_ocr_reader()
+            result = reader.readtext(img)
+            extracted_text = "\n".join([item[1] for item in result])
+            if extracted_text.strip():
+                return {
+                    "type": "text",
+                    "content": f"[OCR de la imagen '{file_name}']:\n{extracted_text[:3000]}"
+                }
+            else:
+                return {
+                    "type": "text",
+                    "content": f"No se encontró texto en la imagen '{file_name}'."
+                }
+        except Exception as e:
+            st.error(f"Error al procesar la imagen con OCR: {e}")
+            return {
+                "type": "text",
+                "content": f"Error al procesar la imagen '{file_name}': {str(e)}"
+            }
     
     # PDF: extraer texto
     elif file_type == "application/pdf":
@@ -268,8 +250,8 @@ st.session_state.selected_voice = selected_voice_label
 st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🤖 Modelo de IA (para el chat)")
-model_options = list(CHAT_MODELS.keys())
+st.sidebar.markdown("### 🤖 Modelo de IA")
+model_options = list(MODELS.keys())
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = model_options[0]
 selected_model_label = st.sidebar.selectbox(
@@ -278,17 +260,16 @@ selected_model_label = st.sidebar.selectbox(
     index=model_options.index(st.session_state.selected_model)
 )
 st.session_state.selected_model = selected_model_label
-selected_model_id = CHAT_MODELS[selected_model_label]
+selected_model_id = MODELS[selected_model_label]
 st.sidebar.markdown(f"**Modelo actual:** `{selected_model_id}`")
-st.sidebar.markdown("**📷 Para imágenes se usará:** `qwen/qwen3.6-27b`")
 
-# --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN ---
+# --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN (para mensajes antiguos) ---
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg["role"] == "assistant":
             content_hash = hashlib.md5(msg["content"].encode()).hexdigest()[:8]
-            if st.button("🔊 Escuchar", key=f"tts_{idx}_{content_hash}"):
+            if st.button("🔊 Escuchar", key=f"tts_hist_{idx}_{content_hash}"):
                 voice_short = VOICES[st.session_state.selected_voice]
                 audio_bytes = text_to_speech(msg["content"], voice_short)
                 if audio_bytes:
@@ -309,37 +290,13 @@ if user_input is not None:
     # 2. Procesar archivos adjuntos
     uploaded_files = user_input.get("files", [])
     file_contents = []
-    images_to_process = []
-    
     for uploaded_file in uploaded_files:
         processed = process_uploaded_file(uploaded_file)
         if processed:
-            if processed.get("type") == "image":
-                images_to_process.append(processed)
-            else:
-                file_contents.append(processed)
+            file_contents.append(processed)
     
-    # 3. Procesar imágenes con el modelo de visión
-    vision_results = []
-    for img_data in images_to_process:
-        # Usar el prompt del usuario o uno por defecto
-        ocr_prompt = user_text if user_text else "Extrae todo el texto de esta imagen y descríbela en español."
-        result = process_image_with_vision(
-            img_data["data"],
-            img_data["mime_type"],
-            ocr_prompt
-        )
-        vision_results.append(f"[Análisis de '{img_data['name']}']:\n{result}")
-    
-    # 4. Si el usuario subió imágenes pero no escribió nada, usar un prompt por defecto
-    if images_to_process and not user_text:
-        user_text = "Por favor, analiza las imágenes que he subido y dime qué contienen."
-    
-    # 5. Construir el mensaje completo (texto + resultados de visión)
+    # 3. Construir el mensaje del usuario (TODO TEXTO, sin imágenes en la API)
     full_user_text = user_text
-    if vision_results:
-        full_user_text += "\n\n" + "\n\n".join(vision_results)
-    
     for fc in file_contents:
         if fc["type"] == "text":
             full_user_text += "\n\n" + fc["content"]
@@ -347,41 +304,36 @@ if user_input is not None:
     if not full_user_text.strip():
         full_user_text = "He subido un archivo."
     
-    # 6. Si el usuario no tiene nombre guardado, intentar extraerlo
+    # 4. Si el usuario no tiene nombre guardado, intentar extraerlo
     if not st.session_state.user_name and user_text:
         posible_nombre = extract_name(user_text)
         if posible_nombre:
             st.session_state.user_name = posible_nombre
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
     
-    # 7. Guardar mensaje del usuario en el estado (para mostrar en el historial)
+    # 5. Guardar mensaje del usuario en el estado (para mostrar en el historial)
     display_text = user_text if user_text else ""
-    if images_to_process:
-        display_text += "\n\n📷 Imágenes subidas: " + ", ".join([f"'{img['name']}'" for img in images_to_process])
     if file_contents:
-        display_text += "\n\n📎 Archivos adjuntos: " + ", ".join([f"'{fc.get('name', 'archivo')}'" for fc in file_contents if fc.get('name')])
-    if not display_text.strip():
-        display_text = "Archivo subido."
+        display_text += "\n\n📎 Archivos adjuntos: " + ", ".join([f"'{f.get('content', 'archivo')}'" for f in file_contents if f])
     
     st.session_state.messages.append({"role": "user", "content": display_text})
     with st.chat_message("user"):
         st.markdown(display_text)
     
-    # 8. Preparar la respuesta del asistente (usando el modelo de chat seleccionado)
+    # 6. Preparar la respuesta del asistente
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
         system_prompt = get_system_prompt()
         
         history_messages = []
-        for msg in st.session_state.messages[:-1]:
+        for msg in st.session_state.messages[:-1]:  # Excluir el mensaje actual
             if msg["role"] == "user":
                 history_messages.append({"role": "user", "content": msg["content"]})
             else:
                 history_messages.append({"role": "assistant", "content": msg["content"]})
         
         try:
-            # Usar el modelo de chat seleccionado para la respuesta final
             response = client.chat.completions.create(
                 model=selected_model_id,
                 messages=[
@@ -395,8 +347,19 @@ if user_input is not None:
             full_response = response.choices[0].message.content
             placeholder.markdown(full_response)
             
+            # 🎯 NUEVO: Botón "Escuchar" que aparece instantáneamente (sin recargar)
+            content_hash = hashlib.md5(full_response.encode()).hexdigest()[:8]
+            if st.button("🔊 Escuchar (nuevo)", key=f"tts_live_{content_hash}"):
+                voice_short = VOICES[st.session_state.selected_voice]
+                audio_bytes = text_to_speech(full_response, voice_short)
+                if audio_bytes:
+                    st.audio(audio_bytes, format="audio/mp3")
+            
+            # 7. Guardar la respuesta en el estado y Firebase
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
+            
+            # ⚠️ Ya NO se necesita st.rerun() porque el botón ya está aquí
             
         except Exception as e:
             st.error(f"Error de conexión con la IA: {str(e)}")
