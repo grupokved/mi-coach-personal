@@ -19,9 +19,6 @@ import easyocr
 import requests
 import time
 
-# 👇 NUEVO: Importamos el componente multimodal
-from st_chat_input_multimodal import multimodal_chat_input
-
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Mi Coach Clara System", page_icon="🧠", layout="wide")
 st.title("🧠 Coach Clara System - Tu Estratega de IA")
@@ -95,6 +92,7 @@ def get_gemini_models():
         return chat_models if chat_models else None
     except Exception as e:
         st.sidebar.warning(f"⚠️ Error al obtener modelos de Gemini: {e}")
+    # Fallback con nombres oficiales
     return {
         "🔴 Gemini 3.1 Flash": "gemini-3.1-flash",
         "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
@@ -133,8 +131,9 @@ VOICES = {
 groq_models = get_groq_models()
 gemini_models = get_gemini_models()
 
-# --- LISTA DE RESPALDO ---
+# --- LISTA DE RESPALDO SIEMPRE INCLUIDA ---
 MODELS = {
+    # 🟢 Groq
     "🟢 Llama 3.3 70B": "llama-3.3-70b-versatile",
     "🟢 Llama 3.1 8B": "llama-3.1-8b-instant",
     "🟢 GPT-OSS 120B": "openai/gpt-oss-120b",
@@ -144,12 +143,14 @@ MODELS = {
     "🟢 Groq Compound Mini": "groq/compound-mini",
     "🟢 Mixtral 8x7B": "mixtral-8x7b-32768",
 
+    # 🔴 Gemini
     "🔴 Gemini 3.1 Flash": "gemini-3.1-flash",
     "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
     "🔴 Gemini 2.5 Flash": "gemini-2.5-flash",
     "🔴 Gemini 2.5 Pro": "gemini-2.5-pro",
 }
 
+# Añadir modelos dinámicos
 if groq_models:
     MODELS.update(groq_models)
 if gemini_models:
@@ -291,6 +292,23 @@ def process_uploaded_file(uploaded_file):
             "content": f"Archivo '{file_name}' subido (tipo: {file_type}). No se pudo extraer texto automáticamente."
         }
 
+# --- FUNCIÓN PARA TRANSCRIBIR AUDIO CON GROQ ---
+def transcribe_audio(audio_bytes):
+    """Transcribe audio usando la API de Groq Whisper."""
+    try:
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = "audio.wav"
+        
+        response = groq_client.audio.transcriptions.create(
+            model="whisper-large-v3",
+            file=audio_file,
+            response_format="text"
+        )
+        return response
+    except Exception as e:
+        st.error(f"Error al transcribir el audio: {e}")
+        return None
+
 # --- DIVISIÓN DE TEXTOS LARGOS ---
 def split_text_into_chunks(text, max_chars=1500):
     if len(text) <= max_chars:
@@ -332,6 +350,7 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
     
     is_gemini = "gemini" in model_id or model_id.startswith("models/gemini")
     
+    # --- Gemini ---
     if is_gemini:
         if not GEMINI_API_KEY:
             return "Error: Cliente de Gemini no disponible."
@@ -376,6 +395,7 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
         else:
             return call_gemini(model_id, system_prompt, text)
     
+    # --- Groq ---
     if is_groq and not groq_client:
         st.error("❌ Cliente de Groq no disponible.")
         return "Error: Cliente de Groq no disponible."
@@ -531,7 +551,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = historial
     st.session_state.user_name = nombre_guardado if nombre_guardado else None
 
-# --- SELECCIONAR MODELO POR DEFECTO (Gemini 3.1 Flash) ---
+# --- SELECCIONAR MODELO POR DEFECTO ---
 if "selected_model_label" not in st.session_state:
     default_model = "🔴 Gemini 3.1 Flash"
     if default_model in MODELS:
@@ -542,8 +562,8 @@ if "selected_model_label" not in st.session_state:
 # --- BARRA LATERAL ---
 st.sidebar.title("⚙️ Configuración")
 
-# Selector de Voz
-st.sidebar.markdown("### 🎤 Voz")
+# Selector de Voz para TTS
+st.sidebar.markdown("### 🎤 Voz para respuestas")
 voice_options = sorted(VOICES.keys())
 if "selected_voice" not in st.session_state:
     st.session_state.selected_voice = "México - Dalia (femenino)"
@@ -560,9 +580,6 @@ st.sidebar.markdown("---")
 # Selector de Modelo
 st.sidebar.markdown("### 🤖 Modelo de IA")
 model_options = sorted(MODELS.keys())
-if "selected_model_label" not in st.session_state:
-    st.session_state.selected_model_label = model_options[0]
-
 selected_model_label = st.sidebar.selectbox(
     "Elige el modelo",
     options=model_options,
@@ -581,6 +598,21 @@ else:
 st.sidebar.markdown(f"**Modelo:** `{selected_model_id}`")
 st.sidebar.caption(f"📋 {len(MODELS)} modelos disponibles")
 
+# --- NUEVO: GRABACIÓN DE AUDIO EN LA BARRA LATERAL ---
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🎤 Grabar mensaje de voz")
+audio_value = st.sidebar.audio_input("Presiona para grabar y enviar")
+
+# Procesar audio si se ha grabado
+if audio_value:
+    with st.spinner("🔄 Transcribiendo audio..."):
+        audio_bytes = audio_value.getvalue()
+        transcribed_text = transcribe_audio(audio_bytes)
+        if transcribed_text:
+            # Guardar el texto transcrito para procesarlo como mensaje
+            st.session_state.voice_text = transcribed_text
+            st.rerun()
+
 # --- MOSTRAR HISTORIAL ---
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
@@ -593,29 +625,34 @@ for idx, msg in enumerate(st.session_state.messages):
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
 
-# --- ENTRADA DEL USUARIO CON MULTIMODAL_CHAT_INPUT ---
-user_input = multimodal_chat_input(
-    placeholder="🎤 ¿Qué tienes en mente hoy? (Puedes grabar audio, subir imágenes, PDFs, etc.)",
-    enable_voice_input=True,          # ← Activa el botón de micrófono
-    voice_recognition_method="web_speech",  # ← Usa el reconocimiento de voz del navegador
-    max_recording_time=60,            # ← Límite de grabación en segundos
-    accept_file=True,                 # ← Permite subir archivos
-    file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv"],  # ← Tipos de archivo permitidos
-)
+# --- ENTRADA DEL USUARIO (chat y voz) ---
+# Si hay un mensaje de voz pendiente, usarlo
+if st.session_state.get("voice_text"):
+    user_text = st.session_state.voice_text
+    # Limpiar el estado para no reenviarlo
+    st.session_state.voice_text = None
+    # Simular que se envió un mensaje
+    # (procesamos directamente)
+    user_input = {"text": user_text, "files": []}
+else:
+    user_input = st.chat_input(
+        placeholder="📝 Escribe tu mensaje (o usa el micrófono en la barra lateral)",
+        accept_file=True,
+        file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv"],
+        accept_audio=False  # Ya manejamos audio aparte
+    )
 
-if user_input:
-    # 📝 Extraer el texto (escrito o transcrito por voz)
-    user_text = user_input.get('text', '')
+# --- PROCESAR EL MENSAJE ---
+if user_input is not None:
+    user_text = user_input.get("text", "")
     
-    # 📎 Procesar archivos adjuntos (imágenes, PDFs, etc.)
-    uploaded_files = user_input.get('files', [])
+    uploaded_files = user_input.get("files", [])
     file_contents = []
     for uploaded_file in uploaded_files:
         processed = process_uploaded_file(uploaded_file)
         if processed:
             file_contents.append(processed)
     
-    # 🧩 Construir el mensaje completo del usuario
     full_user_text = user_text
     for fc in file_contents:
         if fc["type"] == "text":
@@ -624,18 +661,12 @@ if user_input:
     if not full_user_text.strip():
         full_user_text = "He subido un archivo."
     
-    # 🔍 Detectar si se usó voz para mostrar un indicador
-    if user_input.get('audio_metadata', {}).get('used_voice_input', False):
-        st.info("🎤 Mensaje enviado por voz!")
-
-    # 🏷️ Guardar nombre del usuario si no está guardado
     if not st.session_state.user_name and user_text:
         posible_nombre = extract_name(user_text)
         if posible_nombre:
             st.session_state.user_name = posible_nombre
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
     
-    # 📝 Mostrar el mensaje del usuario en el historial
     display_text = user_text if user_text else ""
     if file_contents:
         display_text += "\n\n📎 Archivos adjuntos: " + ", ".join([f"'{f.get('content', 'archivo')}'" for f in file_contents if f])
@@ -644,7 +675,6 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(display_text)
     
-    # 🤖 Preparar la respuesta del asistente
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
@@ -669,7 +699,6 @@ if user_input:
             
             placeholder.markdown(full_response)
             
-            # 🔊 Botón para escuchar la respuesta
             content_hash = hashlib.md5(full_response.encode()).hexdigest()[:8]
             if st.button("🔊 Escuchar (nuevo)", key=f"tts_live_{content_hash}"):
                 voice_short = VOICES[st.session_state.selected_voice]
@@ -677,7 +706,6 @@ if user_input:
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
             
-            # 💾 Guardar la conversación
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
             
