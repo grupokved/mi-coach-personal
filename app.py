@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 from groq import Groq
-from openai import OpenAI
+import google.generativeai as genai
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
@@ -37,7 +37,7 @@ db = firestore.client()
 
 # --- CONFIGURACIÓN DE APIS ---
 GROQ_API_KEY = os.environ.get("GITHUB_TOKEN")
-SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if not GROQ_API_KEY:
     st.error("⚠️ Falta la clave de API de Groq en los Secrets.")
@@ -45,20 +45,12 @@ if not GROQ_API_KEY:
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# 🔑 INICIALIZAR SILICONFLOW CON LA URL CORRECTA
-if SILICONFLOW_API_KEY:
-    try:
-        siliconflow_client = OpenAI(
-            api_key=SILICONFLOW_API_KEY,
-            base_url="https://api.siliconflow.com/v1"  # <--- ¡CORREGIDO!
-        )
-        st.sidebar.success("✅ SiliconFlow conectado correctamente")
-    except Exception as e:
-        siliconflow_client = None
-        st.sidebar.error(f"❌ Error al conectar SiliconFlow: {e}")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_available = True
 else:
-    siliconflow_client = None
-    st.sidebar.warning("⚠️ No se encontró SILICONFLOW_TOKEN. Usando lista de respaldo.")
+    gemini_available = False
+    st.sidebar.warning("⚠️ No se encontró GEMINI_API_KEY. Solo modelos de Groq.")
 
 # --- FUNCIONES PARA OBTENER MODELOS ---
 def get_groq_models():
@@ -84,28 +76,33 @@ def get_groq_models():
         st.sidebar.warning(f"⚠️ Error al obtener modelos de Groq: {e}")
     return None
 
-def get_siliconflow_models():
-    if not SILICONFLOW_API_KEY or not siliconflow_client:
-        return None
+def get_gemini_models():
+    """Devuelve los modelos disponibles de Gemini según la documentación."""
+    # Gemini no tiene un endpoint de listado de modelos como Groq,
+    # pero podemos listar los más comunes y permitir seleccionar.
+    # También podemos intentar listar con genai.list_models() si está disponible.
     try:
-        # SiliconFlow también tiene un endpoint para listar modelos
-        url = "https://api.siliconflow.com/v1/models"
-        headers = {"Authorization": f"Bearer {SILICONFLOW_API_KEY}"}
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            models_data = response.json()
+        if gemini_available:
+            # Intentar obtener modelos de la API
+            models = genai.list_models()
             chat_models = {}
-            for model in models_data.get("data", []):
-                model_id = model.get("id")
-                if model_id:
-                    display_name = model_id
-                    if len(display_name) > 35:
-                        display_name = display_name[:32] + "..."
-                    chat_models[f"🔵 {display_name}"] = model_id
-            return chat_models
+            for model in models:
+                if "gemini" in model.name and "generateContent" in model.supported_generation_methods:
+                    model_id = model.name
+                    display_name = model_id.replace("models/", "")
+                    if len(display_name) > 30:
+                        display_name = display_name[:27] + "..."
+                    chat_models[f"🔴 {display_name}"] = model_id
+            return chat_models if chat_models else None
     except Exception as e:
-        st.sidebar.warning(f"⚠️ Error al obtener modelos de SiliconFlow: {e}")
-    return None
+        st.sidebar.warning(f"⚠️ Error al obtener modelos de Gemini: {e}")
+    # Fallback a lista manual
+    return {
+        "🔴 Gemini 3.5 Flash": "models/gemini-2.0-flash-exp",
+        "🔴 Gemini 3.6 Flash": "models/gemini-2.0-flash",
+        "🔴 Gemini 3 Pro": "models/gemini-2.0-pro-exp",
+        "🔴 Gemini 3 Flash (latest)": "models/gemini-2.0-flash-lite-preview-02-05",
+    }
 
 # --- VOCES DISPONIBLES ---
 VOICES = {
@@ -136,11 +133,11 @@ VOICES = {
 
 # --- OBTENER MODELOS DINÁMICOS ---
 groq_models = get_groq_models()
-siliconflow_models = get_siliconflow_models()
+gemini_models = get_gemini_models()
 
 # --- LISTA DE RESPALDO SIEMPRE INCLUIDA ---
 MODELS = {
-    # 🟢 Groq (respaldo)
+    # 🟢 Groq
     "🟢 Llama 3.3 70B": "llama-3.3-70b-versatile",
     "🟢 Llama 3.1 8B": "llama-3.1-8b-instant",
     "🟢 GPT-OSS 120B": "openai/gpt-oss-120b",
@@ -150,35 +147,17 @@ MODELS = {
     "🟢 Groq Compound Mini": "groq/compound-mini",
     "🟢 Mixtral 8x7B": "mixtral-8x7b-32768",
 
-    # 🔵 SiliconFlow (respaldo)
-    "🔵 DeepSeek-V4-Pro": "deepseek-ai/DeepSeek-V4-Pro",
-    "🔵 DeepSeek-V4-Flash": "deepseek-ai/DeepSeek-V4-Flash",
-    "🔵 Kimi-K3": "moonshotai/Kimi-K3",
-    "🔵 Kimi-K2.7-Code": "moonshotai/Kimi-K2.7-Code",
-    "🔵 GLM-5.2": "zai-org/GLM-5.2",
-    "🔵 Qwen3.6-35B-A3B": "Qwen/Qwen3.6-35B-A3B",
-    "🔵 Qwen3.6-27B": "Qwen/Qwen3.6-27B",
-    "🔵 Gemma-4-31B-it": "google/gemma-4-31B-it",
-    "🔵 DeepSeek-V3.2": "deepseek-ai/DeepSeek-V3.2",
-    "🔵 MiniMax-M3": "MiniMaxAI/MiniMax-M3",
-    "🔵 Qwen3.5-397B-A17B": "Qwen/Qwen3.5-397B-A17B",
-    "🔵 Qwen3.5-122B-A10B": "Qwen/Qwen3.5-122B-A10B",
-    "🔵 Step-3.5-Flash": "stepfun-ai/Step-3.5-Flash",
-    "🔵 Nex-N2-Pro": "nex-agi/Nex-N2-Pro",
-    "🔵 Hy3": "tencent/Hy3",
-    "🔵 LongCat-2.0": "meituan-longcat/LongCat-2.0",
-    "🔵 DeepSeek-V3.1-Terminus": "deepseek-ai/DeepSeek-V3.1-Terminus",
-    "🔵 DeepSeek-R1": "deepseek-ai/DeepSeek-R1",
-    "🔵 Qwen3-32B": "Qwen/Qwen3-32B",
-    "🔵 Qwen3-14B": "Qwen/Qwen3-14B",
-    "🔵 Qwen3-8B": "Qwen/Qwen3-8B",
+    # 🔴 Gemini (respaldo)
+    "🔴 Gemini 2.0 Flash": "models/gemini-2.0-flash-exp",
+    "🔴 Gemini 2.0 Flash (latest)": "models/gemini-2.0-flash-lite-preview-02-05",
+    "🔴 Gemini 2.0 Pro": "models/gemini-2.0-pro-exp",
 }
 
-# Añadir modelos dinámicos (sobrescriben si hay duplicados)
+# Añadir modelos dinámicos
 if groq_models:
     MODELS.update(groq_models)
-if siliconflow_models:
-    MODELS.update(siliconflow_models)
+if gemini_models:
+    MODELS.update(gemini_models)
 
 # --- FUNCIONES DE FIREBASE ---
 def load_chat_history(user_id="default_user"):
@@ -216,7 +195,7 @@ def extract_name(text):
             return match.group(1).strip()
     return None
 
-# --- TEXTO A VOZ (edge-tts) ---
+# --- TEXTO A VOZ ---
 async def text_to_speech_async(text, voice):
     try:
         communicate = edge_tts.Communicate(text, voice)
@@ -234,7 +213,7 @@ def text_to_speech(text, voice):
     asyncio.set_event_loop(loop)
     return loop.run_until_complete(text_to_speech_async(text, voice))
 
-# --- OCR LOCAL (EasyOCR) ---
+# --- OCR LOCAL ---
 @st.cache_resource
 def get_ocr_reader():
     return easyocr.Reader(['es', 'en'], gpu=False)
@@ -316,7 +295,7 @@ def process_uploaded_file(uploaded_file):
             "content": f"Archivo '{file_name}' subido (tipo: {file_type}). No se pudo extraer texto automáticamente."
         }
 
-# --- DIVISIÓN DE TEXTOS LARGOS ---
+# --- DIVISIÓN DE TEXTOS LARGOS (con soporte para Gemini) ---
 def split_text_into_chunks(text, max_chars=1500):
     if len(text) <= max_chars:
         return [text]
@@ -334,13 +313,25 @@ def split_text_into_chunks(text, max_chars=1500):
         chunks.append(current_chunk.strip())
     return chunks
 
+def call_gemini(model_id, system_prompt, user_text):
+    """Llama a Gemini con un solo mensaje (para texto corto o fragmentos)."""
+    if not GEMINI_API_KEY:
+        return "Error: Clave de Gemini no configurada."
+    try:
+        model = genai.GenerativeModel(
+            model_id,
+            system_instruction=system_prompt
+        )
+        response = model.generate_content(user_text)
+        return response.text
+    except Exception as e:
+        return f"Error en Gemini: {str(e)}"
+
 def process_long_text_with_ia(text, system_prompt, history_messages, model_id, max_chars=1500, pause_seconds=3):
     """
     Procesa un texto largo dividiéndolo en partes con pausas.
-    Soporta Groq y SiliconFlow.
+    Soporta Groq y Gemini.
     """
-    chunks = split_text_into_chunks(text, max_chars)
-    
     # Determinar proveedor
     is_groq = False
     groq_prefixes = ["llama-", "mixtral-", "gemma-", "openai/gpt-oss", "meta-llama/", "qwen/qwen", "groq/"]
@@ -349,17 +340,64 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
             is_groq = True
             break
     
-    is_siliconflow = not is_groq
+    is_gemini = model_id.startswith("models/gemini") or model_id.startswith("gemini")
     
+    # Si es Gemini, usamos un flujo diferente (Gemini maneja contexto largo de forma nativa)
+    if is_gemini:
+        if not GEMINI_API_KEY:
+            return "Error: Cliente de Gemini no disponible."
+        # Gemini puede manejar hasta 1M tokens, pero por seguridad dividimos si es muy largo
+        if len(text) > 30000:
+            chunks = split_text_into_chunks(text, max_chars=8000)  # Fragmentos más grandes para Gemini
+            st.info(f"📊 Usando Gemini - {len(text)} caracteres → {len(chunks)} partes con pausas de {pause_seconds}s.")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            partial_responses = []
+            for i, chunk in enumerate(chunks):
+                status_text.text(f"⏳ Procesando parte {i+1} de {len(chunks)}...")
+                progress_bar.progress((i + 1) / len(chunks))
+                chunk_prompt = f"""
+                A continuación, analiza la PARTE {i+1} de {len(chunks)} de un texto extenso.
+                Extrae los puntos clave de esta sección.
+                
+                --- INICIO DE LA PARTE {i+1} ---
+                {chunk}
+                --- FIN DE LA PARTE {i+1} ---
+                """
+                resp = call_gemini(model_id, system_prompt, chunk_prompt)
+                partial_responses.append(resp)
+                if i < len(chunks) - 1:
+                    status_text.text(f"⏳ Esperando {pause_seconds}s...")
+                    time.sleep(pause_seconds)
+            progress_bar.empty()
+            status_text.empty()
+            # Combinar respuestas
+            combined = "\n\n".join(partial_responses)
+            # Generar resumen final
+            summary_prompt = f"""
+            He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL.
+            Organiza tu respuesta en estas secciones:
+            1. Resumen ejecutivo (máximo 10 líneas)
+            2. Flujo de trabajo paso a paso
+            3. Herramientas y costes (tabla)
+            4. Prompts listos para copiar (mínimo 5)
+            5. Aplicación práctica para mi negocio
+            
+            Aquí están los análisis de todas las partes:
+            {combined}
+            """
+            return call_gemini(model_id, system_prompt, summary_prompt)
+        else:
+            # Texto corto para Gemini: procesar directamente
+            return call_gemini(model_id, system_prompt, text)
+    
+    # --- A partir de aquí, lógica para Groq (igual que antes) ---
     if is_groq and not groq_client:
         st.error("❌ Cliente de Groq no disponible.")
         return "Error: Cliente de Groq no disponible."
     
-    if is_siliconflow and not siliconflow_client:
-        st.error("❌ Cliente de SiliconFlow no disponible. Verifica SILICONFLOW_TOKEN y la URL.")
-        return "Error: Cliente de SiliconFlow no disponible."
-    
-    client = groq_client if is_groq else siliconflow_client
+    client = groq_client
+    chunks = split_text_into_chunks(text, max_chars)
     
     if len(chunks) == 1:
         response = client.chat.completions.create(
@@ -373,8 +411,7 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
         )
         return response.choices[0].message.content
     
-    provider_name = "Groq" if is_groq else "SiliconFlow"
-    st.info(f"📊 Usando {provider_name} - {len(text)} caracteres → {len(chunks)} partes con pausas de {pause_seconds}s.")
+    st.info(f"📊 Usando Groq - {len(text)} caracteres → {len(chunks)} partes con pausas de {pause_seconds}s.")
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -544,8 +581,8 @@ selected_model_id = MODELS[selected_model_label]
 
 if selected_model_label.startswith("🟢"):
     st.sidebar.info("**Proveedor:** Groq")
-elif selected_model_label.startswith("🔵"):
-    st.sidebar.info("**Proveedor:** SiliconFlow")
+elif selected_model_label.startswith("🔴"):
+    st.sidebar.info("**Proveedor:** Gemini")
 else:
     st.sidebar.info("**Proveedor:** Desconocido")
 
