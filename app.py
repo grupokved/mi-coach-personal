@@ -7,6 +7,12 @@ from datetime import datetime
 import re
 import edge_tts
 import asyncio
+import base64
+import io
+from PIL import Image
+import PyPDF2
+import csv
+from io import StringIO
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Mi Coach Personal", page_icon="🧠", layout="wide")
@@ -34,55 +40,33 @@ client = Groq(api_key=API_KEY)
 
 # --- DICCIONARIO DE VOCES DISPONIBLES EN ESPAÑOL ---
 VOICES = {
-    # 🇪🇸 España
     "España - Elvira (femenino)": "es-ES-ElviraNeural",
     "España - Álvaro (masculino)": "es-ES-AlvaroNeural",
-    # 🇲🇽 México
     "México - Dalia (femenino)": "es-MX-DaliaNeural",
     "México - Jorge (masculino)": "es-MX-JorgeNeural",
-    # 🇦🇷 Argentina
     "Argentina - Elena (femenino)": "es-AR-ElenaNeural",
-    # 🇧🇴 Bolivia
     "Bolivia - Marcelo (masculino)": "es-BO-MarceloNeural",
-    # 🇨🇱 Chile
     "Chile - Catalina (femenino)": "es-CL-CatalinaNeural",
-    # 🇨🇴 Colombia
     "Colombia - Gonzalo (masculino)": "es-CO-GonzaloNeural",
-    # 🇨🇷 Costa Rica
     "Costa Rica - Juan (masculino)": "es-CR-JuanNeural",
-    # 🇨🇺 Cuba
     "Cuba - Belkys (femenino)": "es-CU-BelkysNeural",
-    # 🇩🇴 República Dominicana
     "República Dominicana - Emilio (masculino)": "es-DO-EmilioNeural",
-    # 🇪🇨 Ecuador
     "Ecuador - Andrea (femenino)": "es-EC-AndreaNeural",
-    # 🇬🇹 Guatemala
     "Guatemala - Andrés (masculino)": "es-GT-AndresNeural",
-    # 🇭🇳 Honduras
     "Honduras - Carlos (masculino)": "es-HN-CarlosNeural",
-    # 🇳🇮 Nicaragua
     "Nicaragua - Federico (masculino)": "es-NI-FedericoNeural",
-    # 🇵🇦 Panamá
     "Panamá - Margarita (femenino)": "es-PA-MargaritaNeural",
-    # 🇵🇪 Perú
     "Perú - Camila (femenino)": "es-PE-CamilaNeural",
-    # 🇵🇷 Puerto Rico
     "Puerto Rico - Karina (femenino)": "es-PR-KarinaNeural",
-    # 🇵🇾 Paraguay
     "Paraguay - Tania (femenino)": "es-PY-TaniaNeural",
-    # 🇸🇻 El Salvador
     "El Salvador - Lorena (femenino)": "es-SV-LorenaNeural",
-    # 🇺🇸 Estados Unidos (español)
     "EE.UU. - Alonso (masculino)": "es-US-AlonsoNeural",
-    # 🇺🇾 Uruguay
     "Uruguay - Mateo (masculino)": "es-UY-MateoNeural",
-    # 🇻🇪 Venezuela
     "Venezuela - Paola (femenino)": "es-VE-PaolaNeural",
 }
 
 # --- FUNCIONES PARA FIREBASE ---
 def load_chat_history(user_id="default_user"):
-    """Carga el historial de chat desde Firestore."""
     try:
         doc_ref = db.collection('chats').document(user_id)
         doc = doc_ref.get()
@@ -96,7 +80,6 @@ def load_chat_history(user_id="default_user"):
         return [], None
 
 def save_chat_history(messages, user_id="default_user", user_name=None):
-    """Guarda el historial de chat en Firestore, incluyendo el nombre del usuario."""
     try:
         doc_ref = db.collection('chats').document(user_id)
         data = {'messages': messages, 'last_updated': datetime.now()}
@@ -107,7 +90,6 @@ def save_chat_history(messages, user_id="default_user", user_name=None):
         st.error(f"Error al guardar el historial: {e}")
 
 def extract_name(text):
-    """Intenta extraer un nombre de un mensaje de presentación."""
     patterns = [
         r"me llamo\s+([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)",
         r"soy\s+([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)",
@@ -121,10 +103,6 @@ def extract_name(text):
 
 # --- FUNCIÓN DE TEXTO A VOZ (edge-tts) ---
 async def text_to_speech_async(text, voice):
-    """
-    Convierte texto a voz usando edge-tts (gratuito, sin API key).
-    Devuelve los bytes del audio MP3.
-    """
     try:
         communicate = edge_tts.Communicate(text, voice)
         audio_data = b""
@@ -137,12 +115,86 @@ async def text_to_speech_async(text, voice):
         return None
 
 def text_to_speech(text, voice):
-    """Función wrapper para llamar desde Streamlit."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     return loop.run_until_complete(text_to_speech_async(text, voice))
 
-# --- GENERAR EL PROMPT DEL SISTEMA DE FORMA DINÁMICA ---
+# --- FUNCIÓN PARA PROCESAR ARCHIVOS SUBIDOS ---
+def process_uploaded_file(uploaded_file):
+    """Procesa el archivo subido y devuelve el contenido extraído y su tipo."""
+    file_type = uploaded_file.type
+    file_name = uploaded_file.name
+    file_bytes = uploaded_file.read()
+    
+    # Imagen: convertir a base64 para enviar a la IA
+    if file_type.startswith("image/"):
+        try:
+            # Convertir a base64
+            encoded = base64.b64encode(file_bytes).decode('utf-8')
+            return {
+                "type": "image",
+                "mime_type": file_type,
+                "data": encoded,
+                "content": f"[Imagen: {file_name}]"
+            }
+        except Exception as e:
+            st.error(f"Error al procesar la imagen: {e}")
+            return None
+    
+    # PDF: extraer texto
+    elif file_type == "application/pdf":
+        try:
+            # Leer PDF con PyPDF2
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            return {
+                "type": "text",
+                "content": f"[Contenido del PDF '{file_name}']:\n{text[:3000]}"  # Limitar a 3000 caracteres
+            }
+        except Exception as e:
+            st.error(f"Error al leer el PDF: {e}")
+            return None
+    
+    # Archivo de texto plano
+    elif file_type == "text/plain":
+        try:
+            text = file_bytes.decode('utf-8')
+            return {
+                "type": "text",
+                "content": f"[Contenido de '{file_name}']:\n{text[:3000]}"
+            }
+        except Exception as e:
+            st.error(f"Error al leer el archivo de texto: {e}")
+            return None
+    
+    # CSV
+    elif file_type == "text/csv":
+        try:
+            csv_text = file_bytes.decode('utf-8')
+            # Convertir a texto legible
+            reader = csv.reader(StringIO(csv_text))
+            lines = []
+            for row in reader:
+                lines.append(", ".join(row))
+            content = "\n".join(lines[:50])  # Limitar a 50 líneas
+            return {
+                "type": "text",
+                "content": f"[Contenido del CSV '{file_name}']:\n{content}"
+            }
+        except Exception as e:
+            st.error(f"Error al leer el CSV: {e}")
+            return None
+    
+    # Otros (docx, etc.) - por ahora solo texto
+    else:
+        return {
+            "type": "text",
+            "content": f"Archivo '{file_name}' subido (tipo: {file_type}). No se pudo extraer texto automáticamente."
+        }
+
+# --- GENERAR EL PROMPT DEL SISTEMA ---
 def get_system_prompt():
     base_prompt = """
 Eres "El Estratega", un coach personal, mentor de vida y estratega empresarial. 
@@ -166,24 +218,15 @@ if "messages" not in st.session_state:
 # --- SELECCIONAR VOZ EN LA BARRA LATERAL ---
 st.sidebar.title("🎤 Configuración de Voz")
 st.sidebar.markdown("Selecciona la voz para el texto a voz:")
-
-# Obtener las opciones del diccionario (ordenadas alfabéticamente)
 voice_options = sorted(VOICES.keys())
-
-# Inicializar la voz seleccionada en la sesión
 if "selected_voice" not in st.session_state:
-    # Por defecto, la voz femenina de México (Dalia) porque es muy natural
     st.session_state.selected_voice = "México - Dalia (femenino)"
-
-# Selector de voz
 selected_voice_label = st.sidebar.selectbox(
     "Elige una voz",
     options=voice_options,
     index=voice_options.index(st.session_state.selected_voice)
 )
 st.session_state.selected_voice = selected_voice_label
-
-# Mostrar la voz actual en la barra lateral
 st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
 st.sidebar.markdown("---")
 
@@ -191,58 +234,129 @@ st.sidebar.markdown("---")
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        # Si el mensaje es del asistente, añadir un botón para escucharlo
         if msg["role"] == "assistant":
-            # Crear un botón con una clave única basada en el índice
-            if st.button("🔊 Escuchar", key=f"tts_{idx}_{msg['content'][:30]}"):
-                # Obtener el shortName de la voz seleccionada
+            # Clave única garantizada: índice + hash del contenido
+            import hashlib
+            content_hash = hashlib.md5(msg["content"].encode()).hexdigest()[:8]
+            if st.button("🔊 Escuchar", key=f"tts_{idx}_{content_hash}"):
                 voice_short = VOICES[st.session_state.selected_voice]
                 audio_bytes = text_to_speech(msg["content"], voice_short)
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
 
 # --- ENTRADA DEL USUARIO Y RESPUESTA ---
-if user_input := st.chat_input(
-    placeholder="¿Qué tienes en mente hoy o qué proyecto estás desarrollando?",
+user_input = st.chat_input(
+    placeholder="¿Qué tienes en mente hoy? (Puedes subir imágenes, PDFs, etc.)",
     accept_file=True,
-    file_type=["pdf", "jpg", "png", "txt", "csv", "docx"],
+    file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv", "docx"],
     accept_audio=True
-):
-    # 1. Si el usuario no tiene nombre guardado, intentar extraerlo del mensaje
-    if not st.session_state.user_name:
-        posible_nombre = extract_name(user_input.get("text", ""))
+)
+
+if user_input is not None:
+    # 1. Extraer texto del mensaje
+    user_text = user_input.get("text", "")
+    
+    # 2. Procesar archivos adjuntos
+    uploaded_files = user_input.get("files", [])
+    file_contents = []
+    for uploaded_file in uploaded_files:
+        processed = process_uploaded_file(uploaded_file)
+        if processed:
+            file_contents.append(processed)
+    
+    # 3. Si hay archivos de imagen, preparar mensaje multimodal
+    # Construir el mensaje del usuario (puede incluir imágenes)
+    user_message_content = []
+    
+    # Añadir el texto del usuario
+    if user_text:
+        user_message_content.append({"type": "text", "text": user_text})
+    
+    # Añadir imágenes (si las hay)
+    for file_content in file_contents:
+        if file_content["type"] == "image":
+            # Formato para modelos de Groq (OpenAI API)
+            user_message_content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{file_content['mime_type']};base64,{file_content['data']}"
+                }
+            })
+        elif file_content["type"] == "text":
+            # Añadir texto extraído (PDF, CSV, etc.)
+            user_message_content.append({"type": "text", "text": file_content["content"]})
+    
+    # Si no hay contenido (solo archivos no procesables), añadir un texto por defecto
+    if not user_message_content:
+        user_message_content.append({"type": "text", "text": "He subido un archivo."})
+    
+    # 4. Si el usuario no tiene nombre guardado, intentar extraerlo
+    if not st.session_state.user_name and user_text:
+        posible_nombre = extract_name(user_text)
         if posible_nombre:
             st.session_state.user_name = posible_nombre
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
-
-    # 2. Añadir mensaje del usuario al estado
-    user_text = user_input.get("text", "")
-    st.session_state.messages.append({"role": "user", "content": user_text})
+    
+    # 5. Guardar mensaje del usuario en el estado (solo texto)
+    # Para mostrar en el historial, guardamos el texto + descripción de archivos
+    display_text = user_text if user_text else ""
+    if file_contents:
+        display_text += "\n\n📎 Archivos adjuntos: " + ", ".join([f"'{f.get('content', 'archivo')}'" for f in file_contents if f])
+    
+    st.session_state.messages.append({"role": "user", "content": display_text})
     with st.chat_message("user"):
-        st.markdown(user_text)
-
-    # 3. Preparar la respuesta del asistente
+        st.markdown(display_text)
+    
+    # 6. Preparar la respuesta del asistente
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
+        # Construir los mensajes para la API
         system_prompt = get_system_prompt()
         api_messages = [{"role": "user", "content": system_prompt}]
-        api_messages.extend(st.session_state.messages)
-
+        
+        # Añadir el historial anterior (solo texto)
+        for msg in st.session_state.messages[:-1]:  # Excluir el mensaje actual (ya lo añadiremos)
+            if msg["role"] == "user":
+                api_messages.append({"role": "user", "content": msg["content"]})
+            else:
+                api_messages.append({"role": "assistant", "content": msg["content"]})
+        
+        # Añadir el mensaje actual con contenido multimodal (si es necesario)
+        # Pero la API de Groq para 'openai/gpt-oss-120b' espera un array de contenido
+        # Si no hay imágenes, usamos texto plano
+        # Si hay imágenes, usamos el formato multimodal
+        
+        # Usar el modelo multimodal 'openai/gpt-oss-120b' para soportar imágenes
         try:
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=api_messages,
-                temperature=0.7
-            )
+            # Si hay contenido de imagen, usar formato multimodal
+            has_image = any(c.get("type") == "image_url" for c in user_message_content)
+            
+            if has_image:
+                # Llamada a la API con imágenes
+                response = client.chat.completions.create(
+                    model="openai/gpt-oss-120b",  # Modelo multimodal que funciona
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message_content}
+                    ],
+                    temperature=0.7
+                )
+            else:
+                # Si no hay imágenes, podemos usar el modelo más rápido o el mismo
+                response = client.chat.completions.create(
+                    model="openai/gpt-oss-120b",
+                    messages=api_messages + [{"role": "user", "content": user_text or "Procesa los archivos subidos."}],
+                    temperature=0.7
+                )
             
             full_response = response.choices[0].message.content
             placeholder.markdown(full_response)
             
-            # 4. Guardar la respuesta de la IA en el estado
+            # 7. Guardar la respuesta en el estado
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             
-            # 5. Guardar el historial completo y el nombre en Firebase
+            # 8. Guardar en Firebase
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
             
         except Exception as e:
