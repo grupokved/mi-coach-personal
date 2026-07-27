@@ -66,10 +66,17 @@ VOICES = {
     "Venezuela - Paola (femenino)": "es-VE-PaolaNeural",
 }
 
-# --- MODELOS DISPONIBLES (los que funcionan) ---
-AVAILABLE_MODELS = {
-    "GPT-OSS (multimodal, razonamiento)": "openai/gpt-oss-120b",
-    "Llama 3.3 (rápido, versátil)": "llama-3.3-70b-versatile",
+# --- MODELOS DISPONIBLES ---
+MODELS = {
+    "GPT-OSS-120B (multimodal)": "openai/gpt-oss-120b",
+    "Llama 3.3 70B (rápido)": "llama-3.3-70b-versatile",
+}
+
+# --- MODELOS DE OCR (VISIÓN) ---
+OCR_MODELS = {
+    "Llama 4 Maverick (OCR)": "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "Llama 4 Scout (OCR)": "meta-llama/llama-4-scout-17b-16e-instruct",
+    "Qwen 3.6 (OCR)": "qwen/qwen3.6-27b",
 }
 
 # --- FUNCIONES PARA FIREBASE ---
@@ -126,25 +133,69 @@ def text_to_speech(text, voice):
     asyncio.set_event_loop(loop)
     return loop.run_until_complete(text_to_speech_async(text, voice))
 
+# --- FUNCIÓN PARA OCR CON MODELOS DE VISIÓN DE GROQ ---
+def ocr_image_with_groq(image_bytes, mime_type, ocr_model):
+    """
+    Usa un modelo de visión de Groq (Llama 4 Maverick, Scout, etc.) para extraer texto de una imagen.
+    """
+    try:
+        # Codificar la imagen en base64
+        encoded = base64.b64encode(image_bytes).decode('utf-8')
+        data_url = f"data:{mime_type};base64,{encoded}"
+        
+        # Llamada al modelo de visión
+        completion = client.chat.completions.create(
+            model=ocr_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Extrae TODO el texto de esta imagen. Devuelve solo el texto extraído, sin comentarios adicionales. Si no hay texto, responde 'No se encontró texto'."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": data_url
+                            }
+                        }
+                    ]
+                }
+            ],
+            temperature=0.1  # Baja temperatura para mayor precisión
+        )
+        
+        extracted_text = completion.choices[0].message.content.strip()
+        return extracted_text if extracted_text else "No se encontró texto."
+    
+    except Exception as e:
+        st.error(f"Error en OCR con {ocr_model}: {e}")
+        return f"Error al procesar la imagen: {str(e)}"
+
 # --- FUNCIÓN PARA PROCESAR ARCHIVOS SUBIDOS ---
-def process_uploaded_file(uploaded_file):
+def process_uploaded_file(uploaded_file, ocr_model):
+    """Procesa el archivo subido y devuelve el contenido extraído."""
     file_type = uploaded_file.type
     file_name = uploaded_file.name
     file_bytes = uploaded_file.read()
     
+    # Imagen: OCR con modelo de visión de Groq
     if file_type.startswith("image/"):
         try:
-            encoded = base64.b64encode(file_bytes).decode('utf-8')
+            extracted_text = ocr_image_with_groq(file_bytes, file_type, ocr_model)
             return {
-                "type": "image",
-                "mime_type": file_type,
-                "data": encoded,
-                "content": f"[Imagen: {file_name}]"
+                "type": "text",
+                "content": f"[OCR de la imagen '{file_name}' usando {ocr_model}]:\n{extracted_text[:3000]}"
             }
         except Exception as e:
             st.error(f"Error al procesar la imagen: {e}")
-            return None
+            return {
+                "type": "text",
+                "content": f"Error al procesar la imagen '{file_name}': {str(e)}"
+            }
     
+    # PDF: extraer texto con PyPDF2
     elif file_type == "application/pdf":
         try:
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
@@ -161,6 +212,7 @@ def process_uploaded_file(uploaded_file):
             st.error(f"Error al leer el PDF: {e}")
             return None
     
+    # Archivo de texto plano
     elif file_type == "text/plain":
         try:
             text = file_bytes.decode('utf-8')
@@ -172,6 +224,7 @@ def process_uploaded_file(uploaded_file):
             st.error(f"Error al leer el archivo de texto: {e}")
             return None
     
+    # CSV
     elif file_type == "text/csv":
         try:
             csv_text = file_bytes.decode('utf-8')
@@ -215,9 +268,10 @@ if "messages" not in st.session_state:
     st.session_state.messages = historial
     st.session_state.user_name = nombre_guardado if nombre_guardado else None
 
-# --- SELECCIONAR VOZ Y MODELO EN LA BARRA LATERAL ---
-st.sidebar.title("🎤 Configuración de Voz")
-st.sidebar.markdown("Selecciona la voz para el texto a voz:")
+# --- SELECCIONAR VOZ, MODELO DE CHAT Y MODELO DE OCR EN LA BARRA LATERAL ---
+st.sidebar.title("⚙️ Configuración")
+
+st.sidebar.markdown("### 🎤 Voz para texto a voz")
 voice_options = sorted(VOICES.keys())
 if "selected_voice" not in st.session_state:
     st.session_state.selected_voice = "México - Dalia (femenino)"
@@ -230,22 +284,32 @@ st.session_state.selected_voice = selected_voice_label
 st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
 
 st.sidebar.markdown("---")
-st.sidebar.title("🧠 Selección de Modelo IA")
-st.sidebar.markdown("Elige el modelo que usará el asistente:")
-
-model_options = list(AVAILABLE_MODELS.keys())
+st.sidebar.markdown("### 🤖 Modelo para el Chat")
+model_options = list(MODELS.keys())
 if "selected_model" not in st.session_state:
-    st.session_state.selected_model = model_options[0]  # Por defecto, el primero
-
+    st.session_state.selected_model = model_options[0]
 selected_model_label = st.sidebar.selectbox(
-    "Modelo IA",
+    "Elige el modelo de chat",
     options=model_options,
     index=model_options.index(st.session_state.selected_model)
 )
 st.session_state.selected_model = selected_model_label
-selected_model_id = AVAILABLE_MODELS[selected_model_label]
-st.sidebar.markdown(f"**Modelo actual:** `{selected_model_id}`")
+selected_model_id = MODELS[selected_model_label]
+st.sidebar.markdown(f"**Chat:** `{selected_model_id}`")
+
 st.sidebar.markdown("---")
+st.sidebar.markdown("### 🖼️ Modelo para OCR (imágenes)")
+ocr_options = list(OCR_MODELS.keys())
+if "selected_ocr_model" not in st.session_state:
+    st.session_state.selected_ocr_model = ocr_options[0]  # Llama 4 Maverick por defecto
+selected_ocr_label = st.sidebar.selectbox(
+    "Elige el modelo de OCR",
+    options=ocr_options,
+    index=ocr_options.index(st.session_state.selected_ocr_model)
+)
+st.session_state.selected_ocr_model = selected_ocr_label
+selected_ocr_model_id = OCR_MODELS[selected_ocr_label]
+st.sidebar.markdown(f"**OCR:** `{selected_ocr_model_id}`")
 
 # --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN ---
 for idx, msg in enumerate(st.session_state.messages):
@@ -271,42 +335,32 @@ if user_input is not None:
     # 1. Extraer texto del mensaje
     user_text = user_input.get("text", "")
     
-    # 2. Procesar archivos adjuntos
+    # 2. Procesar archivos adjuntos usando el modelo de OCR seleccionado
     uploaded_files = user_input.get("files", [])
     file_contents = []
     for uploaded_file in uploaded_files:
-        processed = process_uploaded_file(uploaded_file)
+        processed = process_uploaded_file(uploaded_file, selected_ocr_model_id)
         if processed:
             file_contents.append(processed)
     
-    # 3. Construir el mensaje del usuario (puede incluir imágenes)
-    user_message_content = []
+    # 3. Construir el mensaje del usuario (SOLO TEXTO, sin imágenes en la API)
+    full_user_text = user_text
+    for fc in file_contents:
+        if fc["type"] == "text":
+            full_user_text += "\n\n" + fc["content"]
     
-    if user_text:
-        user_message_content.append({"type": "text", "text": user_text})
+    # Si no hay contenido (solo archivos no procesables), añadir un texto por defecto
+    if not full_user_text.strip():
+        full_user_text = "He subido un archivo."
     
-    for file_content in file_contents:
-        if file_content["type"] == "image":
-            user_message_content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{file_content['mime_type']};base64,{file_content['data']}"
-                }
-            })
-        elif file_content["type"] == "text":
-            user_message_content.append({"type": "text", "text": file_content["content"]})
-    
-    if not user_message_content:
-        user_message_content.append({"type": "text", "text": "He subido un archivo."})
-    
-    # 4. Extraer nombre si es necesario
+    # 4. Si el usuario no tiene nombre guardado, intentar extraerlo
     if not st.session_state.user_name and user_text:
         posible_nombre = extract_name(user_text)
         if posible_nombre:
             st.session_state.user_name = posible_nombre
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
     
-    # 5. Guardar mensaje del usuario en el estado (solo texto para mostrar)
+    # 5. Guardar mensaje del usuario en el estado (para mostrar en el historial)
     display_text = user_text if user_text else ""
     if file_contents:
         display_text += "\n\n📎 Archivos adjuntos: " + ", ".join([f"'{f.get('content', 'archivo')}'" for f in file_contents if f])
@@ -319,48 +373,36 @@ if user_input is not None:
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
+        # Construir los mensajes para la API (TODOS DE TEXTO PLANO)
         system_prompt = get_system_prompt()
         
+        # Preparar el historial anterior (solo texto)
         history_messages = []
-        for msg in st.session_state.messages[:-1]:
+        for msg in st.session_state.messages[:-1]:  # Excluir el mensaje actual
             if msg["role"] == "user":
                 history_messages.append({"role": "user", "content": msg["content"]})
             else:
                 history_messages.append({"role": "assistant", "content": msg["content"]})
         
-        has_image = any(c.get("type") == "image_url" for c in user_message_content)
-        
         try:
-            if has_image:
-                response = client.chat.completions.create(
-                    model=selected_model_id,  # 🚀 Usa el modelo seleccionado
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        *history_messages,
-                        {"role": "user", "content": user_message_content}
-                    ],
-                    temperature=0.7
-                )
-            else:
-                full_user_text = user_text
-                for fc in file_contents:
-                    if fc["type"] == "text":
-                        full_user_text += "\n" + fc["content"]
-                
-                response = client.chat.completions.create(
-                    model=selected_model_id,  # 🚀 Usa el modelo seleccionado
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        *history_messages,
-                        {"role": "user", "content": full_user_text or "Procesa los archivos subidos."}
-                    ],
-                    temperature=0.7
-                )
+            # Usar el modelo de chat seleccionado
+            response = client.chat.completions.create(
+                model=selected_model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    *history_messages,
+                    {"role": "user", "content": full_user_text}
+                ],
+                temperature=0.7
+            )
             
             full_response = response.choices[0].message.content
             placeholder.markdown(full_response)
             
+            # 7. Guardar la respuesta en el estado
             st.session_state.messages.append({"role": "assistant", "content": full_response})
+            
+            # 8. Guardar en Firebase
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
             
         except Exception as e:
