@@ -13,6 +13,7 @@ from PIL import Image
 import PyPDF2
 import csv
 from io import StringIO
+import hashlib
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Mi Coach Personal", page_icon="🧠", layout="wide")
@@ -129,7 +130,6 @@ def process_uploaded_file(uploaded_file):
     # Imagen: convertir a base64 para enviar a la IA
     if file_type.startswith("image/"):
         try:
-            # Convertir a base64
             encoded = base64.b64encode(file_bytes).decode('utf-8')
             return {
                 "type": "image",
@@ -144,14 +144,15 @@ def process_uploaded_file(uploaded_file):
     # PDF: extraer texto
     elif file_type == "application/pdf":
         try:
-            # Leer PDF con PyPDF2
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
             text = ""
             for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
             return {
                 "type": "text",
-                "content": f"[Contenido del PDF '{file_name}']:\n{text[:3000]}"  # Limitar a 3000 caracteres
+                "content": f"[Contenido del PDF '{file_name}']:\n{text[:3000]}"
             }
         except Exception as e:
             st.error(f"Error al leer el PDF: {e}")
@@ -173,12 +174,11 @@ def process_uploaded_file(uploaded_file):
     elif file_type == "text/csv":
         try:
             csv_text = file_bytes.decode('utf-8')
-            # Convertir a texto legible
             reader = csv.reader(StringIO(csv_text))
             lines = []
             for row in reader:
                 lines.append(", ".join(row))
-            content = "\n".join(lines[:50])  # Limitar a 50 líneas
+            content = "\n".join(lines[:50])
             return {
                 "type": "text",
                 "content": f"[Contenido del CSV '{file_name}']:\n{content}"
@@ -187,7 +187,6 @@ def process_uploaded_file(uploaded_file):
             st.error(f"Error al leer el CSV: {e}")
             return None
     
-    # Otros (docx, etc.) - por ahora solo texto
     else:
         return {
             "type": "text",
@@ -236,7 +235,6 @@ for idx, msg in enumerate(st.session_state.messages):
         st.markdown(msg["content"])
         if msg["role"] == "assistant":
             # Clave única garantizada: índice + hash del contenido
-            import hashlib
             content_hash = hashlib.md5(msg["content"].encode()).hexdigest()[:8]
             if st.button("🔊 Escuchar", key=f"tts_{idx}_{content_hash}"):
                 voice_short = VOICES[st.session_state.selected_voice]
@@ -248,7 +246,7 @@ for idx, msg in enumerate(st.session_state.messages):
 user_input = st.chat_input(
     placeholder="¿Qué tienes en mente hoy? (Puedes subir imágenes, PDFs, etc.)",
     accept_file=True,
-    file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv", "docx"],
+    file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv"],
     accept_audio=True
 )
 
@@ -264,8 +262,7 @@ if user_input is not None:
         if processed:
             file_contents.append(processed)
     
-    # 3. Si hay archivos de imagen, preparar mensaje multimodal
-    # Construir el mensaje del usuario (puede incluir imágenes)
+    # 3. Construir el mensaje del usuario (puede incluir imágenes)
     user_message_content = []
     
     # Añadir el texto del usuario
@@ -275,7 +272,6 @@ if user_input is not None:
     # Añadir imágenes (si las hay)
     for file_content in file_contents:
         if file_content["type"] == "image":
-            # Formato para modelos de Groq (OpenAI API)
             user_message_content.append({
                 "type": "image_url",
                 "image_url": {
@@ -297,8 +293,7 @@ if user_input is not None:
             st.session_state.user_name = posible_nombre
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
     
-    # 5. Guardar mensaje del usuario en el estado (solo texto)
-    # Para mostrar en el historial, guardamos el texto + descripción de archivos
+    # 5. Guardar mensaje del usuario en el estado (solo texto para mostrar)
     display_text = user_text if user_text else ""
     if file_contents:
         display_text += "\n\n📎 Archivos adjuntos: " + ", ".join([f"'{f.get('content', 'archivo')}'" for f in file_contents if f])
@@ -313,40 +308,46 @@ if user_input is not None:
         
         # Construir los mensajes para la API
         system_prompt = get_system_prompt()
-        api_messages = [{"role": "user", "content": system_prompt}]
         
-        # Añadir el historial anterior (solo texto)
-        for msg in st.session_state.messages[:-1]:  # Excluir el mensaje actual (ya lo añadiremos)
+        # Preparar el historial anterior (solo texto)
+        history_messages = []
+        for msg in st.session_state.messages[:-1]:  # Excluir el mensaje actual
             if msg["role"] == "user":
-                api_messages.append({"role": "user", "content": msg["content"]})
+                history_messages.append({"role": "user", "content": msg["content"]})
             else:
-                api_messages.append({"role": "assistant", "content": msg["content"]})
+                history_messages.append({"role": "assistant", "content": msg["content"]})
         
-        # Añadir el mensaje actual con contenido multimodal (si es necesario)
-        # Pero la API de Groq para 'openai/gpt-oss-120b' espera un array de contenido
-        # Si no hay imágenes, usamos texto plano
-        # Si hay imágenes, usamos el formato multimodal
+        # Determinar si hay imágenes en el mensaje actual
+        has_image = any(c.get("type") == "image_url" for c in user_message_content)
         
-        # Usar el modelo multimodal 'openai/gpt-oss-120b' para soportar imágenes
         try:
-            # Si hay contenido de imagen, usar formato multimodal
-            has_image = any(c.get("type") == "image_url" for c in user_message_content)
-            
             if has_image:
-                # Llamada a la API con imágenes
+                # Usar modelo multimodal con imágenes
                 response = client.chat.completions.create(
-                    model="openai/gpt-oss-120b",  # Modelo multimodal que funciona
+                    model="openai/gpt-oss-120b",
                     messages=[
                         {"role": "system", "content": system_prompt},
+                        *history_messages,
                         {"role": "user", "content": user_message_content}
                     ],
                     temperature=0.7
                 )
             else:
-                # Si no hay imágenes, podemos usar el modelo más rápido o el mismo
+                # Si no hay imágenes, podemos usar el modelo multimodal o el general
+                # Usamos el mismo modelo para consistencia
+                # Concatenar todo el contenido de texto
+                full_user_text = user_text
+                for fc in file_contents:
+                    if fc["type"] == "text":
+                        full_user_text += "\n" + fc["content"]
+                
                 response = client.chat.completions.create(
                     model="openai/gpt-oss-120b",
-                    messages=api_messages + [{"role": "user", "content": user_text or "Procesa los archivos subidos."}],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        *history_messages,
+                        {"role": "user", "content": full_user_text or "Procesa los archivos subidos."}
+                    ],
                     temperature=0.7
                 )
             
