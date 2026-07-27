@@ -4,3 +4,5 @@ firebase-admin
 edge-tts
 PyPDF2
 Pillow
+easyocr
+torch
