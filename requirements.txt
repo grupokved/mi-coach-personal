@@ -1,4 +1,6 @@
-groq
 streamlit
+groq
 firebase-admin
 edge-tts
+PyPDF2
+Pillow
