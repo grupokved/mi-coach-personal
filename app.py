@@ -1,6 +1,6 @@
 import streamlit as list
 import os
-from openai import OpenAI
+from groq import Groq  # Importamos la librería nativa de Groq
 
 list.set_page_config(page_title="Mi Coach DeepSeek", page_icon="🧠", layout="centered")
 list.title("🧠 Coach Personal e Intermediario Técnico")
@@ -12,11 +12,8 @@ if not API_KEY:
     list.error("Falta configurar la variable de autenticación en Secrets.")
     list.stop()
 
-# Conexión directa a los servidores de Groq
-client = OpenAI(
-    base_url="https://groq.com",
-    api_key=API_KEY,
-)
+# Conexión directa y nativa usando el cliente oficial de Groq
+client = Groq(api_key=API_KEY)
 
 PROMPT_SISTEMA = """
 INSTRUCCIÓN DE ROL (Actúa bajo estos parámetros en cada respuesta):
@@ -41,13 +38,14 @@ if user_input := list.chat_input("¿Qué tienes en mente hoy o qué proyecto est
     with list.chat_message("assistant"):
         message_placeholder = list.empty()
         
-        # Estructura limpia para modelos de razonamiento profundo
+        # Estructura de mensajes para modelos de razonamiento profundo
         mensajes_para_api = [{"role": "user", "content": f"{PROMPT_SISTEMA}\n\nMensaje del usuario: {msg['content']}" if i == 0 else msg['content']} 
                              for i, msg in enumerate(list.session_state.messages)]
         
         try:
+            # Llamada nativa sin intermediarios a los servidores de Groq
             response = client.chat.completions.create(
-                model="deepseek-r1-distill-llama-70b", # Modelo oficial DeepSeek R1 en Groq
+                model="deepseek-r1-distill-llama-70b", # DeepSeek R1 oficial en Groq
                 messages=mensajes_para_api,
                 temperature=0.6
             )
