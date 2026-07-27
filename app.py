@@ -16,7 +16,7 @@ from io import StringIO
 import hashlib
 import easyocr
 import requests
-import time  # <--- Para las pausas entre fragmentos
+import time
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Mi Coach Clara System", page_icon="🧠", layout="wide")
@@ -71,9 +71,6 @@ VOICES = {
 
 # --- FUNCIÓN PARA OBTENER MODELOS DINÁMICAMENTE DESDE GROQ ---
 def get_available_models():
-    """
-    Consulta la API de Groq y devuelve un diccionario con los modelos de chat disponibles.
-    """
     try:
         url = "https://api.groq.com/openai/v1/models"
         headers = {"Authorization": f"Bearer {API_KEY}"}
@@ -96,9 +93,8 @@ def get_available_models():
         st.sidebar.warning(f"⚠️ No se pudo obtener la lista de modelos: {e}")
     return None
 
-# --- OBTENER MODELOS (dinámicos o respaldo) ---
+# --- OBTENER MODELOS ---
 dynamic_models = get_available_models()
-
 if dynamic_models:
     MODELS = dynamic_models
 else:
@@ -138,9 +134,6 @@ def save_chat_history(messages, user_id="default_user", user_name=None):
         st.error(f"Error al guardar el historial: {e}")
 
 def get_knowledge_from_firebase(topic):
-    """
-    Consulta la base de conocimientos en Firebase.
-    """
     try:
         doc_ref = db.collection('knowledge_base').document(topic)
         doc = doc_ref.get()
@@ -151,9 +144,6 @@ def get_knowledge_from_firebase(topic):
     return None
 
 def save_knowledge_to_firebase(topic, content):
-    """
-    Guarda un documento en la base de conocimientos en Firebase.
-    """
     try:
         doc_ref = db.collection('knowledge_base').document(topic)
         doc_ref.set({
@@ -177,7 +167,7 @@ def extract_name(text):
             return match.group(1).strip()
     return None
 
-# --- FUNCIÓN DE TEXTO A VOZ (edge-tts) ---
+# --- TEXTO A VOZ ---
 async def text_to_speech_async(text, voice):
     try:
         communicate = edge_tts.Communicate(text, voice)
@@ -195,13 +185,12 @@ def text_to_speech(text, voice):
     asyncio.set_event_loop(loop)
     return loop.run_until_complete(text_to_speech_async(text, voice))
 
-# --- FUNCIÓN PARA OCR LOCAL CON EASYOCR ---
+# --- OCR LOCAL CON EASYOCR ---
 @st.cache_resource
 def get_ocr_reader():
     return easyocr.Reader(['es', 'en'], gpu=False)
 
 def process_uploaded_file(uploaded_file):
-    """Procesa el archivo subido usando OCR local (EasyOCR) o extracción de texto."""
     file_type = uploaded_file.type
     file_name = uploaded_file.name
     file_bytes = uploaded_file.read()
@@ -278,12 +267,8 @@ def process_uploaded_file(uploaded_file):
             "content": f"Archivo '{file_name}' subido (tipo: {file_type}). No se pudo extraer texto automáticamente."
         }
 
-# --- FUNCIONES PARA DIVIDIR TEXTOS LARGOS Y PROCESARLOS ---
-def split_text_into_chunks(text, max_chars=2500):
-    """
-    Divide un texto en fragmentos de aproximadamente max_chars caracteres,
-    respetando saltos de línea y puntos para no cortar palabras.
-    """
+# --- DIVISIÓN DE TEXTOS LARGOS Y PROCESAMIENTO CON PAUSAS ---
+def split_text_into_chunks(text, max_chars=1500):
     if len(text) <= max_chars:
         return [text]
     
@@ -300,14 +285,14 @@ def split_text_into_chunks(text, max_chars=2500):
         chunks.append(current_chunk.strip())
     return chunks
 
-def process_long_text_with_ia(text, system_prompt, history_messages, client, model_id, max_chars=2500, pause_seconds=3):
+def process_long_text_with_ia(text, system_prompt, history_messages, client, model_id, max_chars=1500, pause_seconds=3):
     """
-    Procesa un texto largo dividiéndolo en partes con pausas para respetar el límite de TPM.
+    Procesa un texto largo dividiéndolo en partes con pausas,
+    y genera un resumen final sin exceder el límite de tamaño de solicitud.
     """
     chunks = split_text_into_chunks(text, max_chars)
     
     if len(chunks) == 1:
-        # Texto corto: procesar directamente
         response = client.chat.completions.create(
             model=model_id,
             messages=[
@@ -319,7 +304,6 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
         )
         return response.choices[0].message.content
     
-    # Texto largo: procesar por partes con pausas
     st.info(f"📊 El texto tiene {len(text)} caracteres. Se dividirá en {len(chunks)} partes con pausas de {pause_seconds}s.")
     
     progress_bar = st.progress(0)
@@ -351,11 +335,9 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
             partial_responses.append(response.choices[0].message.content)
         except Exception as e:
             st.error(f"Error en la parte {i+1}: {e}")
-            # Si falla, esperamos el doble y continuamos
             time.sleep(pause_seconds * 2)
             continue
         
-        # ⏱️ PAUSA ESTRATÉGICA: esperar entre fragmentos para no saturar el TPM
         if i < len(chunks) - 1:
             status_text.text(f"⏳ Esperando {pause_seconds}s antes de la siguiente parte...")
             time.sleep(pause_seconds)
@@ -363,15 +345,27 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
     progress_bar.empty()
     status_text.empty()
     
-    # Generar resumen final (solo si hay respuestas)
     if not partial_responses:
         return "No se pudo procesar el texto. Intenta con un fragmento más pequeño."
     
     st.info("🔄 Generando resumen completo...")
     
+    # Truncar respuestas parciales para evitar solicitud demasiado grande
+    truncated_parts = []
+    for resp in partial_responses:
+        if len(resp) > 2000:
+            truncated_parts.append(resp[:2000] + "\n... (truncado)")
+        else:
+            truncated_parts.append(resp)
+    
     combined_text = "Aquí tienes el análisis completo del texto, organizado por secciones:\n\n"
-    for i, resp in enumerate(partial_responses):
+    for i, resp in enumerate(truncated_parts):
         combined_text += f"--- PARTE {i+1} ---\n\n{resp}\n\n"
+    
+    MAX_SUMMARY_CHARS = 8000
+    if len(combined_text) > MAX_SUMMARY_CHARS:
+        combined_text = combined_text[:MAX_SUMMARY_CHARS] + "\n... (contenido truncado para evitar errores)"
+        st.warning("⚠️ El resumen combinado era muy largo y se ha truncado para evitar errores de tamaño.")
     
     summary_prompt = f"""
     He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL que integre toda la información.
@@ -399,7 +393,7 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
     
     return final_response.choices[0].message.content
 
-# --- GENERAR EL PROMPT DEL SISTEMA CON CLARA SYSTEM ---
+# --- PROMPT DEL SISTEMA CON CLARA SYSTEM ---
 def get_system_prompt():
     base_prompt = """
 Eres "El Estratega", un coach personal, mentor de vida y estratega empresarial especializado en Inteligencia Artificial. 
@@ -433,16 +427,14 @@ Has sido entrenado en la metodología "Clara System", un sistema de formación q
 - Ofrecen acompañamiento personalizado.
 - Enfatizan que "la perfección es enemiga de la acción".
 
-### 💡 INSTRUCCIONES PARA TI (como asistente):
+### 💡 INSTRUCCIONES PARA TI:
 1. Cuando el usuario te pregunte sobre Clara System, responde con la información de este conocimiento.
 2. Cuando el usuario te pida consejos para su negocio, aplica la metodología de Clara System.
 3. Sé práctico, directo y orientado a resultados. No des teorías vacías.
 4. Usa ejemplos concretos de las herramientas que menciona Clara System.
 5. Mantén el tono humano, empático pero exigente: "la perfección es enemiga de la acción".
-6. Si el usuario comparte transcripciones o documentos, analízalos para enriquecer el conocimiento de Clara System.
+6. Si el usuario comparte transcripciones o documentos, analízalos para enriquecer el conocimiento.
 7. Recuerda al usuario que estamos en un momento crucial para aprender IA.
-
-### 📊 DATOS DEL USUARIO:
 """
     if st.session_state.get('user_name'):
         return f"{base_prompt}\n\nDirígete al usuario por su nombre: {st.session_state.user_name}."
@@ -455,7 +447,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = historial
     st.session_state.user_name = nombre_guardado if nombre_guardado else None
 
-# --- SELECCIONAR VOZ Y MODELO EN LA BARRA LATERAL ---
+# --- BARRA LATERAL: VOZ Y MODELO ---
 st.sidebar.title("⚙️ Configuración")
 st.sidebar.markdown("### 🎤 Voz para texto a voz")
 voice_options = sorted(VOICES.keys())
@@ -485,12 +477,7 @@ selected_model_id = MODELS[selected_model_label]
 st.sidebar.markdown(f"**Modelo actual:** `{selected_model_id}`")
 st.sidebar.caption(f"📋 {len(MODELS)} modelos disponibles")
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📚 Base de Conocimientos")
-if st.sidebar.button("📖 Ver documentos guardados"):
-    st.sidebar.info("Documentos guardados en la base de conocimientos.")
-
-# --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN ---
+# --- MOSTRAR HISTORIAL CON BOTÓN DE VOZ ---
 for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -561,7 +548,7 @@ if user_input is not None:
                 history_messages=history_messages,
                 client=client,
                 model_id=selected_model_id,
-                max_chars=2500,
+                max_chars=1500,
                 pause_seconds=3
             )
             
