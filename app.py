@@ -16,6 +16,7 @@ from io import StringIO
 import hashlib
 import easyocr
 import requests
+import time  # <--- Para las pausas entre fragmentos
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Mi Coach Clara System", page_icon="🧠", layout="wide")
@@ -278,7 +279,11 @@ def process_uploaded_file(uploaded_file):
         }
 
 # --- FUNCIONES PARA DIVIDIR TEXTOS LARGOS Y PROCESARLOS ---
-def split_text_into_chunks(text, max_chars=5000):
+def split_text_into_chunks(text, max_chars=2500):
+    """
+    Divide un texto en fragmentos de aproximadamente max_chars caracteres,
+    respetando saltos de línea y puntos para no cortar palabras.
+    """
     if len(text) <= max_chars:
         return [text]
     
@@ -295,10 +300,14 @@ def split_text_into_chunks(text, max_chars=5000):
         chunks.append(current_chunk.strip())
     return chunks
 
-def process_long_text_with_ia(text, system_prompt, history_messages, client, model_id, max_chars=5000):
+def process_long_text_with_ia(text, system_prompt, history_messages, client, model_id, max_chars=2500, pause_seconds=3):
+    """
+    Procesa un texto largo dividiéndolo en partes con pausas para respetar el límite de TPM.
+    """
     chunks = split_text_into_chunks(text, max_chars)
     
     if len(chunks) == 1:
+        # Texto corto: procesar directamente
         response = client.chat.completions.create(
             model=model_id,
             messages=[
@@ -310,7 +319,8 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
         )
         return response.choices[0].message.content
     
-    st.info(f"📊 El texto es muy largo ({len(text)} caracteres). Se dividirá en {len(chunks)} partes para procesarlo.")
+    # Texto largo: procesar por partes con pausas
+    st.info(f"📊 El texto tiene {len(text)} caracteres. Se dividirá en {len(chunks)} partes con pausas de {pause_seconds}s.")
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -329,18 +339,33 @@ def process_long_text_with_ia(text, system_prompt, history_messages, client, mod
         --- FIN DE LA PARTE {i+1} ---
         """
         
-        response = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": chunk_prompt}
-            ],
-            temperature=0.7
-        )
-        partial_responses.append(response.choices[0].message.content)
+        try:
+            response = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": chunk_prompt}
+                ],
+                temperature=0.7
+            )
+            partial_responses.append(response.choices[0].message.content)
+        except Exception as e:
+            st.error(f"Error en la parte {i+1}: {e}")
+            # Si falla, esperamos el doble y continuamos
+            time.sleep(pause_seconds * 2)
+            continue
+        
+        # ⏱️ PAUSA ESTRATÉGICA: esperar entre fragmentos para no saturar el TPM
+        if i < len(chunks) - 1:
+            status_text.text(f"⏳ Esperando {pause_seconds}s antes de la siguiente parte...")
+            time.sleep(pause_seconds)
     
     progress_bar.empty()
     status_text.empty()
+    
+    # Generar resumen final (solo si hay respuestas)
+    if not partial_responses:
+        return "No se pudo procesar el texto. Intenta con un fragmento más pequeño."
     
     st.info("🔄 Generando resumen completo...")
     
@@ -463,7 +488,6 @@ st.sidebar.caption(f"📋 {len(MODELS)} modelos disponibles")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📚 Base de Conocimientos")
 if st.sidebar.button("📖 Ver documentos guardados"):
-    # Aquí podrías mostrar un listado de documentos en Firebase
     st.sidebar.info("Documentos guardados en la base de conocimientos.")
 
 # --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN ---
@@ -537,7 +561,8 @@ if user_input is not None:
                 history_messages=history_messages,
                 client=client,
                 model_id=selected_model_id,
-                max_chars=5000
+                max_chars=2500,
+                pause_seconds=3
             )
             
             placeholder.markdown(full_response)
