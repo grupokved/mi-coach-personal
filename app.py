@@ -43,7 +43,7 @@ if user_input := st.chat_input("¿Qué tienes en mente hoy o qué proyecto está
 
         try:
             response = client.chat.completions.create(
-                model="qwen3-32b",  # ✅ El modelo correcto
+                model="openai/gpt-oss-120b",  # ✅ El modelo correcto
                 messages=api_messages,
                 temperature=0.6  # ✅ Temperatura ideal según documentación
             )
