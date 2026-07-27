@@ -5,16 +5,17 @@ from openai import OpenAI
 list.set_page_config(page_title="Mi Coach DeepSeek", page_icon="🧠", layout="centered")
 list.title("🧠 Coach Personal e Intermediario Técnico")
 
-# Autenticación segura mediante las variables de Streamlit Cloud
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+# Recoge la clave de SiliconFlow guardada de forma segura
+API_KEY = os.environ.get("GITHUB_TOKEN")
 
-if not GITHUB_TOKEN:
-    list.error("Falta configurar la variable 'GITHUB_TOKEN' en la plataforma de Streamlit Cloud.")
+if not API_KEY:
+    list.error("Falta configurar la variable de autenticación en Secrets.")
     list.stop()
 
+# Conexión directa a los servidores estables de SiliconFlow
 client = OpenAI(
-    base_url="https://azure.com",
-    api_key=GITHUB_TOKEN,
+    base_url="https://api.siliconflow.cn/v1",
+    api_key=API_KEY,
 )
 
 PROMPT_SISTEMA = """
@@ -40,28 +41,21 @@ if user_input := list.chat_input("¿Qué tienes en mente hoy o qué proyecto est
     with list.chat_message("assistant"):
         message_placeholder = list.empty()
         
-        # Estructurar los mensajes de forma limpia para DeepSeek-R1
+        # Estructura limpia para modelos de razonamiento profundo
         mensajes_para_api = [{"role": "user", "content": f"{PROMPT_SISTEMA}\n\nMensaje del usuario: {msg['content']}" if i == 0 else msg['content']} 
                              for i, msg in enumerate(list.session_state.messages)]
         
         try:
             response = client.chat.completions.create(
-                model="DeepSeek-R1-0528",
+                model="deepseek-ai/DeepSeek-R1", # El modelo R1 oficial completo y gratis
                 messages=mensajes_para_api,
                 temperature=0.6,
                 max_tokens=4000
             )
             
-            # CORRECCIÓN DEfINITIVA: Extraer el texto de forma segura sin importar el formato de la API
-            if hasattr(response, 'choices') and len(response.choices) > 0:
-                full_response = response.choices[0].message.content
-            elif hasattr(response, 'content'):
-                full_response = response.content
-            else:
-                full_response = str(response)
-                
+            full_response = response.choices[0].message.content
             message_placeholder.markdown(full_response)
             list.session_state.messages.append({"role": "assistant", "content": full_response})
             
         except Exception as e:
-            list.error(f"Error de conexión con la IA: {str(e)}")
+            list.error(f"Error de comunicación con la IA: {str(e)}")
