@@ -19,6 +19,9 @@ import easyocr
 import requests
 import time
 
+# 👇 NUEVO: Importamos el componente multimodal
+from st_chat_input_multimodal import multimodal_chat_input
+
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Mi Coach Clara System", page_icon="🧠", layout="wide")
 st.title("🧠 Coach Clara System - Tu Estratega de IA")
@@ -77,7 +80,6 @@ def get_groq_models():
     return None
 
 def get_gemini_models():
-    """Devuelve los modelos disponibles de Gemini."""
     if not GEMINI_API_KEY:
         return None
     try:
@@ -93,15 +95,11 @@ def get_gemini_models():
         return chat_models if chat_models else None
     except Exception as e:
         st.sidebar.warning(f"⚠️ Error al obtener modelos de Gemini: {e}")
-    # Fallback con nombres oficiales
     return {
+        "🔴 Gemini 3.1 Flash": "gemini-3.1-flash",
         "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
-        "🔴 Gemini 3.1 Flash-Lite": "gemini-3.1-flash-lite",
-        "🔴 Gemini 3.1 Pro (preview)": "gemini-3.1-pro-preview",
-        "🔴 Gemini 3 Flash (preview)": "gemini-3-flash-preview",
         "🔴 Gemini 2.5 Flash": "gemini-2.5-flash",
         "🔴 Gemini 2.5 Pro": "gemini-2.5-pro",
-        "🔴 Gemini 2.5 Flash-Lite": "gemini-2.5-flash-lite",
     }
 
 # --- VOCES DISPONIBLES ---
@@ -135,9 +133,8 @@ VOICES = {
 groq_models = get_groq_models()
 gemini_models = get_gemini_models()
 
-# --- LISTA DE RESPALDO SIEMPRE INCLUIDA ---
+# --- LISTA DE RESPALDO ---
 MODELS = {
-    # 🟢 Groq
     "🟢 Llama 3.3 70B": "llama-3.3-70b-versatile",
     "🟢 Llama 3.1 8B": "llama-3.1-8b-instant",
     "🟢 GPT-OSS 120B": "openai/gpt-oss-120b",
@@ -147,17 +144,12 @@ MODELS = {
     "🟢 Groq Compound Mini": "groq/compound-mini",
     "🟢 Mixtral 8x7B": "mixtral-8x7b-32768",
 
-    # 🔴 Gemini (con nombres oficiales)
+    "🔴 Gemini 3.1 Flash": "gemini-3.1-flash",
     "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
-    "🔴 Gemini 3.1 Flash-Lite": "gemini-3.1-flash-lite",
-    "🔴 Gemini 3.1 Pro": "gemini-3.1-pro-preview",
-    "🔴 Gemini 3 Flash": "gemini-3-flash-preview",
     "🔴 Gemini 2.5 Flash": "gemini-2.5-flash",
     "🔴 Gemini 2.5 Pro": "gemini-2.5-pro",
-    "🔴 Gemini 2.5 Flash-Lite": "gemini-2.5-flash-lite",
 }
 
-# Añadir modelos dinámicos
 if groq_models:
     MODELS.update(groq_models)
 if gemini_models:
@@ -318,7 +310,6 @@ def split_text_into_chunks(text, max_chars=1500):
     return chunks
 
 def call_gemini(model_id, system_prompt, user_text):
-    """Llama a Gemini con un solo mensaje."""
     if not GEMINI_API_KEY:
         return "Error: Clave de Gemini no configurada."
     try:
@@ -332,11 +323,6 @@ def call_gemini(model_id, system_prompt, user_text):
         return f"Error en Gemini: {str(e)}"
 
 def process_long_text_with_ia(text, system_prompt, history_messages, model_id, max_chars=1500, pause_seconds=3):
-    """
-    Procesa un texto largo dividiéndolo en partes con pausas.
-    Soporta Groq y Gemini.
-    """
-    # Determinar proveedor
     is_groq = False
     groq_prefixes = ["llama-", "mixtral-", "gemma-", "openai/gpt-oss", "meta-llama/", "qwen/qwen", "groq/"]
     for prefix in groq_prefixes:
@@ -346,7 +332,6 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
     
     is_gemini = "gemini" in model_id or model_id.startswith("models/gemini")
     
-    # --- Gemini ---
     if is_gemini:
         if not GEMINI_API_KEY:
             return "Error: Cliente de Gemini no disponible."
@@ -391,7 +376,6 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
         else:
             return call_gemini(model_id, system_prompt, text)
     
-    # --- Groq ---
     if is_groq and not groq_client:
         st.error("❌ Cliente de Groq no disponible.")
         return "Error: Cliente de Groq no disponible."
@@ -547,6 +531,14 @@ if "messages" not in st.session_state:
     st.session_state.messages = historial
     st.session_state.user_name = nombre_guardado if nombre_guardado else None
 
+# --- SELECCIONAR MODELO POR DEFECTO (Gemini 3.1 Flash) ---
+if "selected_model_label" not in st.session_state:
+    default_model = "🔴 Gemini 3.1 Flash"
+    if default_model in MODELS:
+        st.session_state.selected_model_label = default_model
+    else:
+        st.session_state.selected_model_label = list(MODELS.keys())[0]
+
 # --- BARRA LATERAL ---
 st.sidebar.title("⚙️ Configuración")
 
@@ -601,24 +593,29 @@ for idx, msg in enumerate(st.session_state.messages):
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
 
-# --- ENTRADA DEL USUARIO ---
-user_input = st.chat_input(
-    placeholder="¿Qué tienes en mente hoy? (Puedes subir imágenes, PDFs, etc.)",
-    accept_file=True,
-    file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv"],
-    accept_audio=True
+# --- ENTRADA DEL USUARIO CON MULTIMODAL_CHAT_INPUT ---
+user_input = multimodal_chat_input(
+    placeholder="🎤 ¿Qué tienes en mente hoy? (Puedes grabar audio, subir imágenes, PDFs, etc.)",
+    enable_voice_input=True,          # ← Activa el botón de micrófono
+    voice_recognition_method="web_speech",  # ← Usa el reconocimiento de voz del navegador
+    max_recording_time=60,            # ← Límite de grabación en segundos
+    accept_file=True,                 # ← Permite subir archivos
+    file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv"],  # ← Tipos de archivo permitidos
 )
 
-if user_input is not None:
-    user_text = user_input.get("text", "")
+if user_input:
+    # 📝 Extraer el texto (escrito o transcrito por voz)
+    user_text = user_input.get('text', '')
     
-    uploaded_files = user_input.get("files", [])
+    # 📎 Procesar archivos adjuntos (imágenes, PDFs, etc.)
+    uploaded_files = user_input.get('files', [])
     file_contents = []
     for uploaded_file in uploaded_files:
         processed = process_uploaded_file(uploaded_file)
         if processed:
             file_contents.append(processed)
     
+    # 🧩 Construir el mensaje completo del usuario
     full_user_text = user_text
     for fc in file_contents:
         if fc["type"] == "text":
@@ -627,12 +624,18 @@ if user_input is not None:
     if not full_user_text.strip():
         full_user_text = "He subido un archivo."
     
+    # 🔍 Detectar si se usó voz para mostrar un indicador
+    if user_input.get('audio_metadata', {}).get('used_voice_input', False):
+        st.info("🎤 Mensaje enviado por voz!")
+
+    # 🏷️ Guardar nombre del usuario si no está guardado
     if not st.session_state.user_name and user_text:
         posible_nombre = extract_name(user_text)
         if posible_nombre:
             st.session_state.user_name = posible_nombre
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
     
+    # 📝 Mostrar el mensaje del usuario en el historial
     display_text = user_text if user_text else ""
     if file_contents:
         display_text += "\n\n📎 Archivos adjuntos: " + ", ".join([f"'{f.get('content', 'archivo')}'" for f in file_contents if f])
@@ -641,6 +644,7 @@ if user_input is not None:
     with st.chat_message("user"):
         st.markdown(display_text)
     
+    # 🤖 Preparar la respuesta del asistente
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
@@ -665,6 +669,7 @@ if user_input is not None:
             
             placeholder.markdown(full_response)
             
+            # 🔊 Botón para escuchar la respuesta
             content_hash = hashlib.md5(full_response.encode()).hexdigest()[:8]
             if st.button("🔊 Escuchar (nuevo)", key=f"tts_live_{content_hash}"):
                 voice_short = VOICES[st.session_state.selected_voice]
@@ -672,6 +677,7 @@ if user_input is not None:
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
             
+            # 💾 Guardar la conversación
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
             
