@@ -66,6 +66,12 @@ VOICES = {
     "Venezuela - Paola (femenino)": "es-VE-PaolaNeural",
 }
 
+# --- MODELOS DISPONIBLES (los que funcionan) ---
+AVAILABLE_MODELS = {
+    "GPT-OSS (multimodal, razonamiento)": "openai/gpt-oss-120b",
+    "Llama 3.3 (rápido, versátil)": "llama-3.3-70b-versatile",
+}
+
 # --- FUNCIONES PARA FIREBASE ---
 def load_chat_history(user_id="default_user"):
     try:
@@ -122,12 +128,10 @@ def text_to_speech(text, voice):
 
 # --- FUNCIÓN PARA PROCESAR ARCHIVOS SUBIDOS ---
 def process_uploaded_file(uploaded_file):
-    """Procesa el archivo subido y devuelve el contenido extraído y su tipo."""
     file_type = uploaded_file.type
     file_name = uploaded_file.name
     file_bytes = uploaded_file.read()
     
-    # Imagen: convertir a base64 para enviar a la IA
     if file_type.startswith("image/"):
         try:
             encoded = base64.b64encode(file_bytes).decode('utf-8')
@@ -141,7 +145,6 @@ def process_uploaded_file(uploaded_file):
             st.error(f"Error al procesar la imagen: {e}")
             return None
     
-    # PDF: extraer texto
     elif file_type == "application/pdf":
         try:
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
@@ -158,7 +161,6 @@ def process_uploaded_file(uploaded_file):
             st.error(f"Error al leer el PDF: {e}")
             return None
     
-    # Archivo de texto plano
     elif file_type == "text/plain":
         try:
             text = file_bytes.decode('utf-8')
@@ -170,7 +172,6 @@ def process_uploaded_file(uploaded_file):
             st.error(f"Error al leer el archivo de texto: {e}")
             return None
     
-    # CSV
     elif file_type == "text/csv":
         try:
             csv_text = file_bytes.decode('utf-8')
@@ -214,7 +215,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = historial
     st.session_state.user_name = nombre_guardado if nombre_guardado else None
 
-# --- SELECCIONAR VOZ EN LA BARRA LATERAL ---
+# --- SELECCIONAR VOZ Y MODELO EN LA BARRA LATERAL ---
 st.sidebar.title("🎤 Configuración de Voz")
 st.sidebar.markdown("Selecciona la voz para el texto a voz:")
 voice_options = sorted(VOICES.keys())
@@ -227,6 +228,23 @@ selected_voice_label = st.sidebar.selectbox(
 )
 st.session_state.selected_voice = selected_voice_label
 st.sidebar.markdown(f"**Voz actual:** {selected_voice_label}")
+
+st.sidebar.markdown("---")
+st.sidebar.title("🧠 Selección de Modelo IA")
+st.sidebar.markdown("Elige el modelo que usará el asistente:")
+
+model_options = list(AVAILABLE_MODELS.keys())
+if "selected_model" not in st.session_state:
+    st.session_state.selected_model = model_options[0]  # Por defecto, el primero
+
+selected_model_label = st.sidebar.selectbox(
+    "Modelo IA",
+    options=model_options,
+    index=model_options.index(st.session_state.selected_model)
+)
+st.session_state.selected_model = selected_model_label
+selected_model_id = AVAILABLE_MODELS[selected_model_label]
+st.sidebar.markdown(f"**Modelo actual:** `{selected_model_id}`")
 st.sidebar.markdown("---")
 
 # --- MOSTRAR EL HISTORIAL CON BOTÓN DE REPRODUCCIÓN ---
@@ -234,7 +252,6 @@ for idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg["role"] == "assistant":
-            # Clave única garantizada: índice + hash del contenido
             content_hash = hashlib.md5(msg["content"].encode()).hexdigest()[:8]
             if st.button("🔊 Escuchar", key=f"tts_{idx}_{content_hash}"):
                 voice_short = VOICES[st.session_state.selected_voice]
@@ -265,11 +282,9 @@ if user_input is not None:
     # 3. Construir el mensaje del usuario (puede incluir imágenes)
     user_message_content = []
     
-    # Añadir el texto del usuario
     if user_text:
         user_message_content.append({"type": "text", "text": user_text})
     
-    # Añadir imágenes (si las hay)
     for file_content in file_contents:
         if file_content["type"] == "image":
             user_message_content.append({
@@ -279,14 +294,12 @@ if user_input is not None:
                 }
             })
         elif file_content["type"] == "text":
-            # Añadir texto extraído (PDF, CSV, etc.)
             user_message_content.append({"type": "text", "text": file_content["content"]})
     
-    # Si no hay contenido (solo archivos no procesables), añadir un texto por defecto
     if not user_message_content:
         user_message_content.append({"type": "text", "text": "He subido un archivo."})
     
-    # 4. Si el usuario no tiene nombre guardado, intentar extraerlo
+    # 4. Extraer nombre si es necesario
     if not st.session_state.user_name and user_text:
         posible_nombre = extract_name(user_text)
         if posible_nombre:
@@ -306,25 +319,21 @@ if user_input is not None:
     with st.chat_message("assistant"):
         placeholder = st.empty()
         
-        # Construir los mensajes para la API
         system_prompt = get_system_prompt()
         
-        # Preparar el historial anterior (solo texto)
         history_messages = []
-        for msg in st.session_state.messages[:-1]:  # Excluir el mensaje actual
+        for msg in st.session_state.messages[:-1]:
             if msg["role"] == "user":
                 history_messages.append({"role": "user", "content": msg["content"]})
             else:
                 history_messages.append({"role": "assistant", "content": msg["content"]})
         
-        # Determinar si hay imágenes en el mensaje actual
         has_image = any(c.get("type") == "image_url" for c in user_message_content)
         
         try:
             if has_image:
-                # Usar modelo multimodal con imágenes
                 response = client.chat.completions.create(
-                    model="openai/gpt-oss-120b",
+                    model=selected_model_id,  # 🚀 Usa el modelo seleccionado
                     messages=[
                         {"role": "system", "content": system_prompt},
                         *history_messages,
@@ -333,16 +342,13 @@ if user_input is not None:
                     temperature=0.7
                 )
             else:
-                # Si no hay imágenes, podemos usar el modelo multimodal o el general
-                # Usamos el mismo modelo para consistencia
-                # Concatenar todo el contenido de texto
                 full_user_text = user_text
                 for fc in file_contents:
                     if fc["type"] == "text":
                         full_user_text += "\n" + fc["content"]
                 
                 response = client.chat.completions.create(
-                    model="openai/gpt-oss-120b",
+                    model=selected_model_id,  # 🚀 Usa el modelo seleccionado
                     messages=[
                         {"role": "system", "content": system_prompt},
                         *history_messages,
@@ -354,10 +360,7 @@ if user_input is not None:
             full_response = response.choices[0].message.content
             placeholder.markdown(full_response)
             
-            # 7. Guardar la respuesta en el estado
             st.session_state.messages.append({"role": "assistant", "content": full_response})
-            
-            # 8. Guardar en Firebase
             save_chat_history(st.session_state.messages, user_name=st.session_state.user_name)
             
         except Exception as e:
