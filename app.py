@@ -21,8 +21,8 @@ import requests
 import time
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Mi Coach Clara System", page_icon="🧠", layout="wide")
-st.title("🧠 Coach Clara System - Tu Estratega de IA")
+st.set_page_config(page_title="Estratega de Negocios con IA", page_icon="🧠", layout="wide")
+st.title("🧠 Estratega de Negocios con IA - Tu Socio Ejecutivo")
 
 # --- CONFIGURACIÓN DE FIREBASE ---
 if not firebase_admin._apps:
@@ -52,7 +52,7 @@ if GEMINI_API_KEY:
     gemini_available = True
 else:
     gemini_available = False
-    st.sidebar.warning("⚠️ No se encontró GEMINI_API_KEY.")
+    st.sidebar.warning("⚠️ No se encontró GEMINI_API_KEY. Solo modelos de Groq y OpenRouter.")
 
 if OPENROUTER_API_KEY:
     openrouter_client = OpenAI(
@@ -60,7 +60,7 @@ if OPENROUTER_API_KEY:
         api_key=OPENROUTER_API_KEY,
         default_headers={
             "HTTP-Referer": "https://tu-app.streamlit.app",
-            "X-Title": "Mi Coach Clara System",
+            "X-Title": "Estratega de Negocios con IA",
         }
     )
     st.sidebar.success("✅ OpenRouter conectado")
@@ -95,20 +95,13 @@ def get_groq_models():
 def get_gemini_models():
     if not GEMINI_API_KEY:
         return None
-    try:
-        models = genai.list_models()
-        chat_models = {}
-        for model in models:
-            if "gemini" in model.name and "generateContent" in model.supported_generation_methods:
-                model_id = model.name.replace("models/", "")
-                display_name = model_id
-                if len(display_name) > 30:
-                    display_name = display_name[:27] + "..."
-                chat_models[f"🔴 {display_name}"] = model_id
-        return chat_models if chat_models else None
-    except Exception as e:
-        st.sidebar.warning(f"⚠️ Error al obtener modelos de Gemini: {e}")
-    return None
+    # Solo los modelos que funcionan según Iván
+    return {
+        "🔴 Gemini 3.1 Flash": "gemini-3.1-flash",
+        "🔴 Gemini 3.6 Flash": "gemini-3.6-flash",
+        "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
+        "🔴 Gemini 3.5 Flash-Lite": "gemini-3.5-flash-lite",
+    }
 
 def get_openrouter_models():
     return {
@@ -155,6 +148,7 @@ gemini_models = get_gemini_models()
 openrouter_models = get_openrouter_models()
 
 MODELS = {
+    # Groq (respaldo)
     "🟢 Llama 3.3 70B": "llama-3.3-70b-versatile",
     "🟢 Llama 3.1 8B": "llama-3.1-8b-instant",
     "🟢 GPT-OSS 120B": "openai/gpt-oss-120b",
@@ -164,13 +158,13 @@ MODELS = {
     "🟢 Groq Compound Mini": "groq/compound-mini",
     "🟢 Mixtral 8x7B": "mixtral-8x7b-32768",
 
-    "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
+    # Gemini (solo los que funcionan)
     "🔴 Gemini 3.1 Flash": "gemini-3.1-flash",
-    "🔴 Gemini 3.1 Flash-Lite": "gemini-3.1-flash-lite",
-    "🔴 Gemini 2.5 Flash": "gemini-2.5-flash",
-    "🔴 Gemini 2.5 Pro": "gemini-2.5-pro",
-    "🔴 Gemini 2.5 Flash-Lite": "gemini-2.5-flash-lite",
+    "🔴 Gemini 3.6 Flash": "gemini-3.6-flash",
+    "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
+    "🔴 Gemini 3.5 Flash-Lite": "gemini-3.5-flash-lite",
 
+    # OpenRouter
     "🟣 GPT-4o-mini": "openai/gpt-4o-mini",
     "🟣 Gemini 3.5 Flash (OR)": "google/gemini-3.5-flash",
     "🟣 Gemini 3.1 Flash (OR)": "google/gemini-3.1-flash",
@@ -190,7 +184,6 @@ if openrouter_models:
 
 # --- FUNCIONES DE MEMORIA Y RESUMEN ---
 def get_user_profile(user_id="default_user"):
-    """Recupera el perfil del usuario desde Firebase."""
     try:
         doc_ref = db.collection('users').document(user_id)
         doc = doc_ref.get()
@@ -201,7 +194,6 @@ def get_user_profile(user_id="default_user"):
     return {}
 
 def save_user_profile(profile, user_id="default_user"):
-    """Guarda el perfil del usuario en Firebase."""
     try:
         doc_ref = db.collection('users').document(user_id)
         doc_ref.set(profile, merge=True)
@@ -209,7 +201,6 @@ def save_user_profile(profile, user_id="default_user"):
         st.error(f"Error al guardar perfil: {e}")
 
 def get_conversation_summary(user_id="default_user"):
-    """Recupera el resumen de la conversación desde Firebase."""
     try:
         doc_ref = db.collection('chats').document(user_id)
         doc = doc_ref.get()
@@ -220,7 +211,6 @@ def get_conversation_summary(user_id="default_user"):
     return ''
 
 def save_conversation_summary(summary, user_id="default_user"):
-    """Guarda el resumen de la conversación en Firebase."""
     try:
         doc_ref = db.collection('chats').document(user_id)
         doc_ref.set({
@@ -231,7 +221,6 @@ def save_conversation_summary(summary, user_id="default_user"):
         st.error(f"Error al guardar el resumen: {e}")
 
 def get_chat_history(user_id="default_user"):
-    """Recupera el historial de mensajes desde Firebase."""
     try:
         doc_ref = db.collection('chats').document(user_id)
         doc = doc_ref.get()
@@ -242,7 +231,6 @@ def get_chat_history(user_id="default_user"):
     return []
 
 def save_chat_history(messages, user_id="default_user"):
-    """Guarda el historial de mensajes en Firebase."""
     try:
         doc_ref = db.collection('chats').document(user_id)
         doc_ref.set({
@@ -312,6 +300,31 @@ def generate_summary(messages, system_prompt, model_id):
     except Exception as e:
         st.error(f"Error al generar resumen: {e}")
         return "No se pudo generar resumen."
+
+# --- BÚSQUEDA GRATUITA (SIN TAVILY) ---
+def search_free(query):
+    """
+    Sugiere herramientas gratuitas para investigación de mercado.
+    """
+    return f"""
+    🔍 **Investigación recomendada para: "{query}"**
+
+    Te sugiero que uses estas herramientas gratuitas:
+
+    1. **Google Trends**: https://trends.google.com
+       → Analiza tendencias de búsqueda relacionadas con tu consulta.
+
+    2. **AnswerThePublic**: https://answerthepublic.com
+       → Descubre preguntas que la gente hace sobre el tema.
+
+    3. **Google Search** (búsqueda manual):
+       → Busca "{query}" y analiza los primeros resultados.
+
+    4. **Google Alerts**: https://www.google.com/alerts
+       → Configura alertas para monitorear el tema.
+
+    **Luego, vuelve con los resultados y los analizamos juntos.**
+    """
 
 # --- TEXTO A VOZ ---
 async def text_to_speech_async(text, voice):
@@ -672,46 +685,97 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
 
     return "Error: No se pudo determinar el proveedor."
 
-# --- PROMPT DEL SISTEMA CON IDENTIDAD ---
+# --- PROMPT DEL SISTEMA ---
 def get_system_prompt():
     base_prompt = """
-Eres "El Estratega", un coach personal, mentor de vida y estratega empresarial especializado en Inteligencia Artificial. 
-Tu enfoque es profundamente humano, empático y perspicaz.
+Eres "El Estratega de Negocios con IA", un asistente especializado en ayudar a profesionales independientes a construir negocios y servicios diferenciados, entendiendo la psicología del cliente, el nuevo entorno de la IA, y recomendando herramientas gratuitas para ejecutar sus ideas.
 
-### 🧠 CONOCIMIENTO ESPECIALIZADO: CLARA SYSTEM
-Has sido entrenado en la metodología "Clara System", un sistema de formación que enseña a cualquier persona a usar inteligencia artificial para multiplicar resultados en su negocio.
+### 🧠 CONOCIMIENTO FUNDAMENTAL
 
-**Filosofía:**
-- La IA ya está cambiando el mundo. Hay un año o año y medio para aprovechar este momento.
-- Cualquier persona puede aprender a usar IA sin conocimientos técnicos.
-- El objetivo no es solo aprender, sino APLICAR la IA para tener más clientes, ventas e ingresos.
-- El sistema ha demostrado multiplicar por 5 los resultados en 7 meses.
+**1. La nueva realidad del consumo:**
+- El 8-10% de los consumidores ya delegan decisiones al 100% a agentes de IA.
+- Ahora no solo hay que convencer al cliente, sino también a la IA que elige por él.
+- Esto se llama **GEO (Generative Engine Optimization)**: optimizar para aparecer en respuestas de IA (Gemini, ChatGPT, Claude).
 
-**Metodología:**
-1. Entrenar una IA específica para tu negocio (no usar IA genérica).
-2. Generar contenido (vídeos, textos, imágenes) con IA para atraer clientes.
-3. Usar herramientas como Suno, Freepik, Seedance.
-4. Crear prompts estructurados para cada herramienta.
-5. Editar y combinar resultados para obtener un producto profesional.
+**2. Economía conductual aplicada:**
+- Las personas toman decisiones con "atajos mentales" (reciprocidad, anclaje, escasez, prueba social, autoridad).
+- Entenderlos te permite influir éticamente en las decisiones de tus clientes.
+- **Influencia ética**: Dar alternativas claras, ser transparente, beneficiar a ambas partes.
+- **Manipulación**: Ocultar opciones, engañar, beneficiar solo a una parte.
+- **Regla de oro**: Si no te gustaría salir en portada del periódico por lo que haces, no lo hagas.
 
-**Herramientas clave:**
-- Suno: generar música y jingles.
-- Freepik: generar imágenes y vídeos.
-- CapCut / DaVinci Resolve: edición de vídeo.
-- IAs entrenadas para cada negocio.
+**3. Clientes sintéticos:**
+- La IA puede replicar el comportamiento humano para testear productos, precios y mensajes.
+- Permite iterar mucho más rápido y barato que con encuestas tradicionales.
 
-### 💡 INSTRUCCIONES PARA TI:
-1. Cuando el usuario te pregunte sobre Clara System, responde con esta información.
-2. Cuando el usuario te pida consejos para su negocio, aplica la metodología de Clara System.
-3. Sé práctico, directo y orientado a resultados.
-4. Usa ejemplos concretos de las herramientas mencionadas.
-5. Mantén el tono humano, empático pero exigente.
-6. Si el usuario comparte transcripciones o documentos, analízalos para enriquecer el conocimiento.
-7. Recuerda al usuario que estamos en un momento crucial para aprender IA.
+**4. Rendición cognitiva:**
+- Peligro de delegar decisiones sin revisar, confiando ciegamente en la IA.
+- Siempre hay que activar el "sistema 2" (pensamiento reflexivo) antes de actuar.
+
+### 🛠️ HERRAMIENTAS GRATUITAS RECOMENDADAS
+
+**Creación de contenido:**
+- **Canva** (gratis): Diseño gráfico y vídeos cortos. Ideal para redes sociales.
+- **Clipchamp** (gratis): Editor de vídeo simple, integrado con Microsoft.
+- **CapCut** (gratis): Edición de vídeo avanzada para móvil y escritorio.
+
+**Investigación de mercado:**
+- **Google Trends** (gratis): Analiza tendencias de búsqueda.
+- **AnswerThePublic** (gratis): Descubre preguntas que la gente hace sobre un tema.
+- **Google Alerts** (gratis): Monitorea menciones de tu marca o competencia.
+
+**Landing pages y sitios web:**
+- **Vercel** (gratis): Despliega páginas web estáticas.
+- **Netlify** (gratis): Alternativa a Vercel.
+- **GitHub Pages** (gratis): Aloja páginas web desde tu repositorio.
+
+**IA para negocios (planes gratuitos):**
+- **InVideo** (gratis con marca de agua): Prueba antes de invertir.
+- **Manus** (gratis con límites): Agente autónomo para construir negocios.
+
+**Consejo:**
+- Siempre prueba las versiones gratuitas antes de invertir dinero.
+- Si una herramienta requiere pago, busca alternativas gratuitas o usa el plan gratuito.
+
+### 💡 CÓMO AYUDAS AL USUARIO
+
+1. **Investigación con perspectiva conductual**: No solo analizas competencia, sino que entiendes **por qué** los clientes eligen unas opciones sobre otras.
+
+2. **Definición de servicios diferenciadores**: Propuestas que apelan a los **atajos mentales** del cliente.
+
+3. **Estrategia GEO**: Enseñas al usuario a posicionarse para aparecer en las respuestas de IA.
+
+4. **Recomendación de herramientas**: Según el objetivo del usuario, sugieres la herramienta más adecuada (InVideo, Manus, Canva, etc.).
+
+5. **Generación de guiones y prompts optimizados**: Ayudas a crear el contenido perfecto para cada herramienta.
+
+6. **Materiales de venta con psicología aplicada**: Argumentarios, preguntas de apertura, respuestas a objeciones.
+
+7. **Pruebas con clientes sintéticos**: Sugieres testear ideas con IA antes de lanzarlas.
+
+8. **Marco ético**: Siempre incluyes una reflexión sobre si la recomendación cruza la línea de la manipulación.
+
+### ⚠️ ADVERTENCIAS IMPORTANTES
+
+- **No eres un oráculo**: Tus recomendaciones deben ser validadas por el usuario.
+- **Fomenta el pensamiento crítico**: Anima al usuario a cuestionar y revisar tus sugerencias.
+- **Contexto es clave**: Una misma recomendación puede ser buena en un contexto y mala en otro.
+- **No delegues sin revisar**: La "rendición cognitiva" es peligrosa; siempre hay que activar el sistema reflexivo.
+- **Prueba antes de lanzar**: Recomienda usar versiones gratuitas o de prueba de las herramientas antes de invertir.
+
+### 📌 INSTRUCCIONES DE RESPUESTA
+
+1. **Empieza con preguntas** para entender el contexto del usuario (profesión, objetivos, situación actual).
+2. **Aplica los principios de economía conductual** en tus recomendaciones (explica el "por qué" psicológico).
+3. **Sé transparente**: Distingue entre influencia ética y manipulación.
+4. **Recomienda herramientas concretas** según el objetivo del usuario.
+5. **Ofrece pasos concretos**: No des teoría vacía, da acciones específicas.
+6. **Incluye el "test del titular"**: "¿Te gustaría que esto salga en portada?" para asegurar la ética.
+7. **Sé práctico**: Si el usuario no tiene ideas, proponle opciones basadas en su perfil.
+8. **Conecta todo**: Muestra cómo la estrategia, el contenido y las herramientas trabajan juntas.
 """
-    # Añadir identidad del usuario si existe
     if st.session_state.get('user_name'):
-        return f"{base_prompt}\n\nDirígete al usuario por su nombre: {st.session_state.user_name}."
+        return f"{base_prompt}\n\nRecuerda que estás hablando con {st.session_state.user_name}. Dirígete a él/ella por su nombre y adapta tus recomendaciones a su contexto profesional."
     else:
         return base_prompt
 
@@ -733,7 +797,6 @@ if "messages" not in st.session_state:
     # Si no hay resumen y hay mensajes, generar uno
     if not st.session_state.summary and len(st.session_state.messages) > 5:
         st.info("🔄 Generando resumen inicial...")
-        # Usar el primer modelo de la lista para el resumen inicial
         temp_model = list(MODELS.keys())[0]
         st.session_state.summary = generate_summary(
             st.session_state.messages,
@@ -837,12 +900,11 @@ for idx, msg in enumerate(st.session_state.messages):
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
 
-# --- ENTRADA DEL USUARIO ---
+# --- ENTRADA DEL USUARIO (SIN MICRÓFONO) ---
 user_input = st.chat_input(
-    placeholder="¿Qué tienes en mente hoy? (Puedes subir imágenes, PDFs, etc.)",
+    placeholder="¿Qué proyecto, negocio o idea quieres construir hoy? (Puedes subir imágenes, PDFs, etc.)",
     accept_file=True,
-    file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv"],
-    accept_audio=True
+    file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv"]
 )
 
 if user_input is not None:
@@ -883,7 +945,7 @@ if user_input is not None:
         
         system_prompt = get_system_prompt()
         
-        # --- CONSTRUIR CONTEXTO PARA LA IA (resumen + últimos mensajes) ---
+        # --- CONSTRUIR CONTEXTO (resumen + últimos mensajes) ---
         context_messages = []
         
         # 1. Identidad del usuario (siempre)
@@ -908,12 +970,22 @@ if user_input is not None:
         # 4. Añadir el mensaje actual
         context_messages.append({"role": "user", "content": full_user_text})
         
+        # 5. Si la consulta parece de investigación, sugerir herramientas gratuitas
+        search_keywords = ["investigar", "buscar", "tendencias", "competencia", "mercado", "actual", "qué está pasando"]
+        if any(kw in full_user_text.lower() for kw in search_keywords):
+            st.info("🔍 Te sugiero que investigues usando herramientas gratuitas (Google Trends, AnswerThePublic, etc.)")
+            # Añadir sugerencia al contexto
+            search_suggestion = search_free(full_user_text)
+            context_messages.append({
+                "role": "system",
+                "content": search_suggestion
+            })
+        
         try:
-            # Llamar a la IA con el contexto reducido
             full_response = process_long_text_with_ia(
-                text=full_user_text,  # Se usa para la división de texto largo
+                text=full_user_text,
                 system_prompt=system_prompt,
-                history_messages=context_messages,  # Contexto reducido
+                history_messages=context_messages,
                 model_id=selected_model_id,
                 max_chars=800,
                 pause_seconds=5
