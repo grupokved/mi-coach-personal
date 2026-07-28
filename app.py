@@ -2,6 +2,7 @@ import streamlit as st
 import os
 from groq import Groq
 import google.generativeai as genai
+from openai import OpenAI  # Para OpenRouter
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
@@ -38,19 +39,37 @@ db = firestore.client()
 # --- CONFIGURACIÓN DE APIS ---
 GROQ_API_KEY = os.environ.get("GITHUB_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 if not GROQ_API_KEY:
     st.error("⚠️ Falta la clave de API de Groq en los Secrets.")
     st.stop()
 
+# Cliente Groq
 groq_client = Groq(api_key=GROQ_API_KEY)
 
+# Cliente Gemini
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_available = True
 else:
     gemini_available = False
-    st.sidebar.warning("⚠️ No se encontró GEMINI_API_KEY. Solo modelos de Groq.")
+    st.sidebar.warning("⚠️ No se encontró GEMINI_API_KEY. Solo modelos de Groq y OpenRouter.")
+
+# Cliente OpenRouter
+if OPENROUTER_API_KEY:
+    openrouter_client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=OPENROUTER_API_KEY,
+        default_headers={
+            "HTTP-Referer": "https://tu-app.streamlit.app",  # Cambia por tu URL real
+            "X-Title": "Mi Coach Clara System",
+        }
+    )
+    st.sidebar.success("✅ OpenRouter conectado")
+else:
+    openrouter_client = None
+    st.sidebar.warning("⚠️ No se encontró OPENROUTER_API_KEY.")
 
 # --- FUNCIONES PARA OBTENER MODELOS ---
 def get_groq_models():
@@ -92,12 +111,26 @@ def get_gemini_models():
         return chat_models if chat_models else None
     except Exception as e:
         st.sidebar.warning(f"⚠️ Error al obtener modelos de Gemini: {e}")
-    # Fallback con nombres oficiales
+    return None
+
+def get_openrouter_models():
+    """Devuelve una lista de modelos populares de OpenRouter (sin API call)."""
+    # OpenRouter no tiene un endpoint público de listado sin autenticación,
+    # así que usamos una lista de respaldo con los más populares.
     return {
-        "🔴 Gemini 3.1 Flash": "gemini-3.1-flash",
-        "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
-        "🔴 Gemini 2.5 Flash": "gemini-2.5-flash",
-        "🔴 Gemini 2.5 Pro": "gemini-2.5-pro",
+        "🟣 GPT-4o (OpenRouter)": "openai/gpt-4o",
+        "🟣 GPT-4o-mini": "openai/gpt-4o-mini",
+        "🟣 Claude 3.5 Sonnet": "anthropic/claude-3.5-sonnet",
+        "🟣 Claude 3.7 Sonnet": "anthropic/claude-3.7-sonnet",
+        "🟣 Gemini 3.5 Flash": "google/gemini-3.5-flash",
+        "🟣 Gemini 3.1 Flash": "google/gemini-3.1-flash",
+        "🟣 Mistral 7B": "mistralai/mistral-7b-instruct",
+        "🟣 Llama 3.3 70B": "meta-llama/llama-3.3-70b-instruct",
+        "🟣 Llama 3.1 8B": "meta-llama/llama-3.1-8b-instruct",
+        "🟣 DeepSeek-V3": "deepseek/deepseek-chat",
+        "🟣 DeepSeek-R1": "deepseek/deepseek-r1",
+        "🟣 Qwen 2.5 72B": "qwen/qwen-2.5-72b-instruct",
+        "🟣 Qwen 3.6 27B": "qwen/qwen-2.5-27b-instruct",
     }
 
 # --- VOCES DISPONIBLES ---
@@ -130,6 +163,7 @@ VOICES = {
 # --- OBTENER MODELOS DINÁMICOS ---
 groq_models = get_groq_models()
 gemini_models = get_gemini_models()
+openrouter_models = get_openrouter_models()
 
 # --- LISTA DE RESPALDO SIEMPRE INCLUIDA ---
 MODELS = {
@@ -144,10 +178,27 @@ MODELS = {
     "🟢 Mixtral 8x7B": "mixtral-8x7b-32768",
 
     # 🔴 Gemini
-    "🔴 Gemini 3.1 Flash": "gemini-3.1-flash",
     "🔴 Gemini 3.5 Flash": "gemini-3.5-flash",
+    "🔴 Gemini 3.1 Flash": "gemini-3.1-flash",
+    "🔴 Gemini 3.1 Flash-Lite": "gemini-3.1-flash-lite",
     "🔴 Gemini 2.5 Flash": "gemini-2.5-flash",
     "🔴 Gemini 2.5 Pro": "gemini-2.5-pro",
+    "🔴 Gemini 2.5 Flash-Lite": "gemini-2.5-flash-lite",
+
+    # 🟣 OpenRouter
+    "🟣 GPT-4o (OpenRouter)": "openai/gpt-4o",
+    "🟣 GPT-4o-mini": "openai/gpt-4o-mini",
+    "🟣 Claude 3.5 Sonnet": "anthropic/claude-3.5-sonnet",
+    "🟣 Claude 3.7 Sonnet": "anthropic/claude-3.7-sonnet",
+    "🟣 Gemini 3.5 Flash": "google/gemini-3.5-flash",
+    "🟣 Gemini 3.1 Flash": "google/gemini-3.1-flash",
+    "🟣 Mistral 7B": "mistralai/mistral-7b-instruct",
+    "🟣 Llama 3.3 70B": "meta-llama/llama-3.3-70b-instruct",
+    "🟣 Llama 3.1 8B": "meta-llama/llama-3.1-8b-instruct",
+    "🟣 DeepSeek-V3": "deepseek/deepseek-chat",
+    "🟣 DeepSeek-R1": "deepseek/deepseek-r1",
+    "🟣 Qwen 2.5 72B": "qwen/qwen-2.5-72b-instruct",
+    "🟣 Qwen 3.6 27B": "qwen/qwen-2.5-27b-instruct",
 }
 
 # Añadir modelos dinámicos
@@ -155,6 +206,8 @@ if groq_models:
     MODELS.update(groq_models)
 if gemini_models:
     MODELS.update(gemini_models)
+if openrouter_models:
+    MODELS.update(openrouter_models)
 
 # --- FUNCIONES DE FIREBASE ---
 def load_chat_history(user_id="default_user"):
@@ -292,23 +345,6 @@ def process_uploaded_file(uploaded_file):
             "content": f"Archivo '{file_name}' subido (tipo: {file_type}). No se pudo extraer texto automáticamente."
         }
 
-# --- FUNCIÓN PARA TRANSCRIBIR AUDIO CON GROQ ---
-def transcribe_audio(audio_bytes):
-    """Transcribe audio usando la API de Groq Whisper."""
-    try:
-        audio_file = io.BytesIO(audio_bytes)
-        audio_file.name = "audio.wav"
-        
-        response = groq_client.audio.transcriptions.create(
-            model="whisper-large-v3",
-            file=audio_file,
-            response_format="text"
-        )
-        return response
-    except Exception as e:
-        st.error(f"Error al transcribir el audio: {e}")
-        return None
-
 # --- DIVISIÓN DE TEXTOS LARGOS ---
 def split_text_into_chunks(text, max_chars=1500):
     if len(text) <= max_chars:
@@ -341,15 +377,15 @@ def call_gemini(model_id, system_prompt, user_text):
         return f"Error en Gemini: {str(e)}"
 
 def process_long_text_with_ia(text, system_prompt, history_messages, model_id, max_chars=1500, pause_seconds=3):
-    is_groq = False
-    groq_prefixes = ["llama-", "mixtral-", "gemma-", "openai/gpt-oss", "meta-llama/", "qwen/qwen", "groq/"]
-    for prefix in groq_prefixes:
-        if model_id.startswith(prefix):
-            is_groq = True
-            break
-    
-    is_gemini = "gemini" in model_id or model_id.startswith("models/gemini")
-    
+    """
+    Procesa un texto largo dividiéndolo en partes con pausas.
+    Soporta Groq, Gemini y OpenRouter.
+    """
+    # Determinar proveedor
+    is_groq = any(model_id.startswith(p) for p in ["llama-", "mixtral-", "gemma-", "openai/gpt-oss", "meta-llama/", "qwen/qwen", "groq/"])
+    is_gemini = "gemini" in model_id
+    is_openrouter = not is_groq and not is_gemini  # Todo lo demás va a OpenRouter
+
     # --- Gemini ---
     if is_gemini:
         if not GEMINI_API_KEY:
@@ -394,114 +430,200 @@ def process_long_text_with_ia(text, system_prompt, history_messages, model_id, m
             return call_gemini(model_id, system_prompt, summary_prompt)
         else:
             return call_gemini(model_id, system_prompt, text)
-    
+
     # --- Groq ---
-    if is_groq and not groq_client:
-        st.error("❌ Cliente de Groq no disponible.")
-        return "Error: Cliente de Groq no disponible."
-    
-    client = groq_client
-    chunks = split_text_into_chunks(text, max_chars)
-    
-    if len(chunks) == 1:
-        response = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                *history_messages,
-                {"role": "user", "content": text}
-            ],
-            temperature=0.7
-        )
-        return response.choices[0].message.content
-    
-    st.info(f"📊 Usando Groq - {len(text)} caracteres → {len(chunks)} partes con pausas de {pause_seconds}s.")
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    partial_responses = []
-    for i, chunk in enumerate(chunks):
-        status_text.text(f"⏳ Procesando parte {i+1} de {len(chunks)}...")
-        progress_bar.progress((i + 1) / len(chunks))
+    if is_groq:
+        if not groq_client:
+            return "Error: Cliente de Groq no disponible."
         
-        chunk_prompt = f"""
-        A continuación, analiza la PARTE {i+1} de {len(chunks)} de un texto extenso.
-        Extrae los puntos clave de esta sección de forma estructurada.
+        client = groq_client
+        chunks = split_text_into_chunks(text, max_chars)
         
-        --- INICIO DE LA PARTE {i+1} ---
-        {chunk}
-        --- FIN DE LA PARTE {i+1} ---
-        """
-        
-        try:
+        if len(chunks) == 1:
             response = client.chat.completions.create(
                 model=model_id,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": chunk_prompt}
+                    *history_messages,
+                    {"role": "user", "content": text}
                 ],
                 temperature=0.7
             )
-            partial_responses.append(response.choices[0].message.content)
-        except Exception as e:
-            st.error(f"Error en parte {i+1}: {e}")
-            time.sleep(pause_seconds * 2)
-            continue
+            return response.choices[0].message.content
         
-        if i < len(chunks) - 1:
-            status_text.text(f"⏳ Esperando {pause_seconds}s...")
-            time.sleep(pause_seconds)
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    if not partial_responses:
-        return "No se pudo procesar el texto. Intenta con fragmentos más pequeños."
-    
-    st.info("🔄 Generando resumen completo...")
-    
-    truncated_parts = []
-    for resp in partial_responses:
-        if len(resp) > 2000:
-            truncated_parts.append(resp[:2000] + "\n... (truncado)")
+        st.info(f"📊 Usando Groq - {len(text)} caracteres → {len(chunks)} partes con pausas de {pause_seconds}s.")
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        partial_responses = []
+        for i, chunk in enumerate(chunks):
+            status_text.text(f"⏳ Procesando parte {i+1} de {len(chunks)}...")
+            progress_bar.progress((i + 1) / len(chunks))
+            
+            chunk_prompt = f"""
+            A continuación, analiza la PARTE {i+1} de {len(chunks)} de un texto extenso.
+            Extrae los puntos clave de esta sección de forma estructurada.
+            
+            --- INICIO DE LA PARTE {i+1} ---
+            {chunk}
+            --- FIN DE LA PARTE {i+1} ---
+            """
+            
+            try:
+                response = client.chat.completions.create(
+                    model=model_id,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": chunk_prompt}
+                    ],
+                    temperature=0.7
+                )
+                partial_responses.append(response.choices[0].message.content)
+            except Exception as e:
+                st.error(f"Error en parte {i+1}: {e}")
+                time.sleep(pause_seconds * 2)
+                continue
+            
+            if i < len(chunks) - 1:
+                status_text.text(f"⏳ Esperando {pause_seconds}s...")
+                time.sleep(pause_seconds)
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        if not partial_responses:
+            return "No se pudo procesar el texto. Intenta con fragmentos más pequeños."
+        
+        st.info("🔄 Generando resumen completo...")
+        
+        truncated_parts = []
+        for resp in partial_responses:
+            if len(resp) > 2000:
+                truncated_parts.append(resp[:2000] + "\n... (truncado)")
+            else:
+                truncated_parts.append(resp)
+        
+        combined_text = "Aquí tienes el análisis completo del texto, organizado por secciones:\n\n"
+        for i, resp in enumerate(truncated_parts):
+            combined_text += f"--- PARTE {i+1} ---\n\n{resp}\n\n"
+        
+        MAX_SUMMARY_CHARS = 8000
+        if len(combined_text) > MAX_SUMMARY_CHARS:
+            combined_text = combined_text[:MAX_SUMMARY_CHARS] + "\n... (contenido truncado)"
+            st.warning("⚠️ El resumen combinado se ha truncado para evitar errores de tamaño.")
+        
+        summary_prompt = f"""
+        He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL.
+        
+        Organiza tu respuesta en estas secciones:
+        1. **Resumen ejecutivo** (máximo 10 líneas)
+        2. **Flujo de trabajo paso a paso**
+        3. **Herramientas y costes** (tabla)
+        4. **Prompts listos para copiar** (mínimo 5)
+        5. **Aplicación práctica para mi negocio**
+        
+        Aquí están los análisis de todas las partes:
+        
+        {combined_text}
+        """
+        
+        final_response = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": summary_prompt}
+            ],
+            temperature=0.7
+        )
+        return final_response.choices[0].message.content
+
+    # --- OpenRouter ---
+    if is_openrouter:
+        if not openrouter_client:
+            return "Error: Cliente de OpenRouter no disponible."
+        
+        client = openrouter_client
+        
+        # OpenRouter puede manejar textos largos, pero por seguridad dividimos si es necesario
+        if len(text) > 30000:
+            chunks = split_text_into_chunks(text, max_chars=8000)
+            st.info(f"📊 Usando OpenRouter - {len(text)} caracteres → {len(chunks)} partes con pausas de {pause_seconds}s.")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            partial_responses = []
+            for i, chunk in enumerate(chunks):
+                status_text.text(f"⏳ Procesando parte {i+1} de {len(chunks)}...")
+                progress_bar.progress((i + 1) / len(chunks))
+                
+                chunk_prompt = f"""
+                A continuación, analiza la PARTE {i+1} de {len(chunks)} de un texto extenso.
+                Extrae los puntos clave de esta sección.
+                
+                --- INICIO DE LA PARTE {i+1} ---
+                {chunk}
+                --- FIN DE LA PARTE {i+1} ---
+                """
+                
+                try:
+                    response = client.chat.completions.create(
+                        model=model_id,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": chunk_prompt}
+                        ],
+                        temperature=0.7
+                    )
+                    partial_responses.append(response.choices[0].message.content)
+                except Exception as e:
+                    st.error(f"Error en parte {i+1}: {e}")
+                    time.sleep(pause_seconds * 2)
+                    continue
+                
+                if i < len(chunks) - 1:
+                    status_text.text(f"⏳ Esperando {pause_seconds}s...")
+                    time.sleep(pause_seconds)
+            
+            progress_bar.empty()
+            status_text.empty()
+            
+            if not partial_responses:
+                return "No se pudo procesar el texto. Intenta con fragmentos más pequeños."
+            
+            combined = "\n\n".join(partial_responses)
+            summary_prompt = f"""
+            He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL.
+            Organiza tu respuesta en estas secciones:
+            1. Resumen ejecutivo (máximo 10 líneas)
+            2. Flujo de trabajo paso a paso
+            3. Herramientas y costes (tabla)
+            4. Prompts listos para copiar (mínimo 5)
+            5. Aplicación práctica para mi negocio
+            
+            Aquí están los análisis de todas las partes:
+            {combined}
+            """
+            final_response = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": summary_prompt}
+                ],
+                temperature=0.7
+            )
+            return final_response.choices[0].message.content
         else:
-            truncated_parts.append(resp)
-    
-    combined_text = "Aquí tienes el análisis completo del texto, organizado por secciones:\n\n"
-    for i, resp in enumerate(truncated_parts):
-        combined_text += f"--- PARTE {i+1} ---\n\n{resp}\n\n"
-    
-    MAX_SUMMARY_CHARS = 8000
-    if len(combined_text) > MAX_SUMMARY_CHARS:
-        combined_text = combined_text[:MAX_SUMMARY_CHARS] + "\n... (contenido truncado)"
-        st.warning("⚠️ El resumen combinado se ha truncado para evitar errores de tamaño.")
-    
-    summary_prompt = f"""
-    He analizado el texto en {len(chunks)} partes. Ahora necesito un RESUMEN EJECUTIVO FINAL.
-    
-    Organiza tu respuesta en estas secciones:
-    1. **Resumen ejecutivo** (máximo 10 líneas)
-    2. **Flujo de trabajo paso a paso**
-    3. **Herramientas y costes** (tabla)
-    4. **Prompts listos para copiar** (mínimo 5)
-    5. **Aplicación práctica para mi negocio**
-    
-    Aquí están los análisis de todas las partes:
-    
-    {combined_text}
-    """
-    
-    final_response = client.chat.completions.create(
-        model=model_id,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": summary_prompt}
-        ],
-        temperature=0.7
-    )
-    
-    return final_response.choices[0].message.content
+            # Texto corto para OpenRouter
+            response = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    *history_messages,
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.7
+            )
+            return response.choices[0].message.content
 
 # --- PROMPT DEL SISTEMA ---
 def get_system_prompt():
@@ -551,19 +673,11 @@ if "messages" not in st.session_state:
     st.session_state.messages = historial
     st.session_state.user_name = nombre_guardado if nombre_guardado else None
 
-# --- SELECCIONAR MODELO POR DEFECTO ---
-if "selected_model_label" not in st.session_state:
-    default_model = "🔴 Gemini 3.1 Flash"
-    if default_model in MODELS:
-        st.session_state.selected_model_label = default_model
-    else:
-        st.session_state.selected_model_label = list(MODELS.keys())[0]
-
 # --- BARRA LATERAL ---
 st.sidebar.title("⚙️ Configuración")
 
-# Selector de Voz para TTS
-st.sidebar.markdown("### 🎤 Voz para respuestas")
+# Selector de Voz
+st.sidebar.markdown("### 🎤 Voz")
 voice_options = sorted(VOICES.keys())
 if "selected_voice" not in st.session_state:
     st.session_state.selected_voice = "México - Dalia (femenino)"
@@ -580,6 +694,9 @@ st.sidebar.markdown("---")
 # Selector de Modelo
 st.sidebar.markdown("### 🤖 Modelo de IA")
 model_options = sorted(MODELS.keys())
+if "selected_model_label" not in st.session_state:
+    st.session_state.selected_model_label = model_options[0]
+
 selected_model_label = st.sidebar.selectbox(
     "Elige el modelo",
     options=model_options,
@@ -592,26 +709,13 @@ if selected_model_label.startswith("🟢"):
     st.sidebar.info("**Proveedor:** Groq")
 elif selected_model_label.startswith("🔴"):
     st.sidebar.info("**Proveedor:** Gemini")
+elif selected_model_label.startswith("🟣"):
+    st.sidebar.info("**Proveedor:** OpenRouter")
 else:
     st.sidebar.info("**Proveedor:** Desconocido")
 
 st.sidebar.markdown(f"**Modelo:** `{selected_model_id}`")
 st.sidebar.caption(f"📋 {len(MODELS)} modelos disponibles")
-
-# --- NUEVO: GRABACIÓN DE AUDIO EN LA BARRA LATERAL ---
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🎤 Grabar mensaje de voz")
-audio_value = st.sidebar.audio_input("Presiona para grabar y enviar")
-
-# Procesar audio si se ha grabado
-if audio_value:
-    with st.spinner("🔄 Transcribiendo audio..."):
-        audio_bytes = audio_value.getvalue()
-        transcribed_text = transcribe_audio(audio_bytes)
-        if transcribed_text:
-            # Guardar el texto transcrito para procesarlo como mensaje
-            st.session_state.voice_text = transcribed_text
-            st.rerun()
 
 # --- MOSTRAR HISTORIAL ---
 for idx, msg in enumerate(st.session_state.messages):
@@ -625,24 +729,14 @@ for idx, msg in enumerate(st.session_state.messages):
                 if audio_bytes:
                     st.audio(audio_bytes, format="audio/mp3")
 
-# --- ENTRADA DEL USUARIO (chat y voz) ---
-# Si hay un mensaje de voz pendiente, usarlo
-if st.session_state.get("voice_text"):
-    user_text = st.session_state.voice_text
-    # Limpiar el estado para no reenviarlo
-    st.session_state.voice_text = None
-    # Simular que se envió un mensaje
-    # (procesamos directamente)
-    user_input = {"text": user_text, "files": []}
-else:
-    user_input = st.chat_input(
-        placeholder="📝 Escribe tu mensaje (o usa el micrófono en la barra lateral)",
-        accept_file=True,
-        file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv"],
-        accept_audio=False  # Ya manejamos audio aparte
-    )
+# --- ENTRADA DEL USUARIO ---
+user_input = st.chat_input(
+    placeholder="¿Qué tienes en mente hoy? (Puedes subir imágenes, PDFs, etc.)",
+    accept_file=True,
+    file_type=["pdf", "jpg", "jpeg", "png", "txt", "csv"],
+    accept_audio=True
+)
 
-# --- PROCESAR EL MENSAJE ---
 if user_input is not None:
     user_text = user_input.get("text", "")
     
