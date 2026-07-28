@@ -1,6 +1,7 @@
 streamlit
 groq
 google-generativeai
+openai
 firebase-admin
 edge-tts
 PyPDF2
